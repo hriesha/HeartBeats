@@ -44,4 +44,7 @@ Example:
 - Audio Processing | `pydub`, `librosa`, `soundstretch`              
 - BPM Detection    | `heartpy`, OpenCV (camera), wearable APIs       
 - Deployment       | Vercel (frontend), Render/AWS (backend)        
-- Integrations     | Spotify Web API, Apple MusicKit                 
+- Integrations     | Spotify Web API, Apple MusicKit
+
+## Team: Saachi, Hriesha
+
