@@ -1,0 +1,17 @@
+# Environment and secret files
+.env
+*.env
+
+# Spotify OAuth cache
+.cache*
+.cache
+.cache-heartbeats
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
