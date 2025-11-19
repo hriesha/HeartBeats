@@ -1,5 +1,5 @@
 # HeartBeats 💓🎧🏃
-A cross-platform AI-powered app that synchronizes music tempo (BPM) with your heart rate or physical activity, letting you experience sound that literally moves with you. Whether you’re running, cycling, meditating, or studying, the app dynamically adjusts playback speed or switches tracks to match your current rhythm (biometric input). Because common, we all cringe the same way when that one wrong song plays mid workout. No one wants that. 
+A cross-platform app that synchronizes music tempo (BPM) with your heart rate or physical activity, letting you experience sound that literally moves with you. Whether you’re running, cycling, meditating, or studying, the app dynamically adjusts playback speed or switches tracks to match your current rhythm (biometric input). Because common, we all cringe the same way when that one wrong song plays mid workout. No one wants that. 
 
 ## Overview
 Modern music apps personalize playlists by genre or mood - but not by you.
