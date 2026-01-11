@@ -14,6 +14,8 @@ export type VibeType = {
   name: string;
   color: string;
   tags: string[];
+  clusterId?: number;
+  meanTempo?: number;
 };
 
 export default function App() {
@@ -101,7 +103,7 @@ export default function App() {
         {currentScreen === 'bpm' && <BPMSelection onSubmit={handleBPMSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}
         {currentScreen === 'vibe' && <VibeSelection bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
-        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} onBack={handleBack} />}
+        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} />}
         {currentScreen === 'trackerConnected' && <TrackerConnected onComplete={handleTrackerConnected} />}
       </PhoneFrame>
     </div>

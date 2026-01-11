@@ -1,40 +1,79 @@
 import { motion } from 'motion/react';
-import { ChevronLeft, Play, Heart } from 'lucide-react';
+import { ChevronLeft, Music } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { VibeType } from '../App';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import { heartbeatsApi, Track } from '../services/heartbeatsApi';
+import { SongQueue } from './SongQueue';
 
 interface VibeDetailProps {
   vibe: VibeType;
+  bpm: number;
   onBack: () => void;
 }
 
-// Sample data for the BPM graph
-const bpmData = [
-  { time: '0:00', bpm: 120 },
-  { time: '0:30', bpm: 125 },
-  { time: '1:00', bpm: 130 },
-  { time: '1:30', bpm: 128 },
-  { time: '2:00', bpm: 135 },
-  { time: '2:30', bpm: 140 },
-  { time: '3:00', bpm: 138 },
-  { time: '3:30', bpm: 142 },
-  { time: '4:00', bpm: 145 },
-  { time: '4:30', bpm: 140 },
-  { time: '5:00', bpm: 135 },
-];
+export function VibeDetail({ vibe, bpm, onBack }: VibeDetailProps) {
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showQueue, setShowQueue] = useState(false);
 
-// Sample playlist data
-const playlistSongs = [
-  { id: 1, title: 'Summer Vibes', artist: 'The Chill Makers', duration: '3:45', bpm: 128 },
-  { id: 2, title: 'Midnight Drive', artist: 'Lo-Fi Dreams', duration: '4:12', bpm: 125 },
-  { id: 3, title: 'Ocean Breeze', artist: 'Calm Waves', duration: '3:28', bpm: 130 },
-  { id: 4, title: 'Golden Hour', artist: 'Sunset Collective', duration: '4:05', bpm: 132 },
-  { id: 5, title: 'Peaceful Mind', artist: 'Zen Masters', duration: '3:52', bpm: 126 },
-];
+  useEffect(() => {
+    // Fetch tracks for this cluster when component mounts
+    const fetchTracks = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        // First get track IDs using KNN
+        const tracksResponse = await heartbeatsApi.getTracks(bpm, vibe.clusterId, 10);
+        
+        if (tracksResponse.success && tracksResponse.data) {
+          const trackIds = tracksResponse.data.tracks.map(t => t.track_id);
+          
+          // Then get full track details from Spotify
+          const detailsResponse = await heartbeatsApi.getTrackDetails(trackIds);
+          
+          if (detailsResponse.success && detailsResponse.data) {
+            // Merge metadata
+            const tracksMap = new Map(tracksResponse.data.tracks.map(t => [t.track_id, t]));
+            const mergedTracks = detailsResponse.data.tracks.map(detail => ({
+              ...tracksMap.get(detail.id || '') || {},
+              ...detail,
+            })) as Track[];
+            
+            setTracks(mergedTracks);
+            setShowQueue(true);
+          } else {
+            // Fallback to basic track info if Spotify API fails
+            setTracks(tracksResponse.data.tracks);
+            setShowQueue(true);
+          }
+        } else {
+          setError(tracksResponse.error || 'Failed to load tracks');
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      } finally {
+        setLoading(false);
+      }
+    };
 
-export function VibeDetail({ vibe, onBack }: VibeDetailProps) {
+    fetchTracks();
+  }, [vibe.clusterId, bpm]);
+
+  if (showQueue && tracks.length > 0) {
+    return (
+      <SongQueue 
+        tracks={tracks} 
+        clusterId={vibe.clusterId} 
+        bpm={bpm}
+        onBack={onBack}
+      />
+    );
+  }
+
   return (
-    <div className="relative w-full h-full overflow-auto" style={{ fontFamily: 'Poppins, sans-serif' }}>
+    <div className="relative w-full h-full overflow-auto flex items-center justify-center" style={{ fontFamily: 'Poppins, sans-serif' }}>
       {/* Background with gradient overlay */}
       <div 
         className="absolute inset-0 z-0"
@@ -44,210 +83,43 @@ export function VibeDetail({ vibe, onBack }: VibeDetailProps) {
       />
       
       {/* Content */}
-      <div className="relative z-10 w-full h-full">
-        {/* Back Button */}
-        <button
-          onClick={onBack}
-          className="absolute top-4 left-4 p-2 rounded-full transition-all z-20"
-          style={{
-            backgroundColor: 'rgba(0, 48, 73, 0.8)',
-            color: '#FCBF49'
-          }}
-        >
-          <ChevronLeft className="w-6 h-6" />
-        </button>
-
-        {/* Vibe Header */}
-        <div className="pt-16 pb-6 px-6">
-          <motion.div 
-            className="rounded-2xl p-6 flex items-center justify-between"
-            style={{
-              backgroundColor: vibe.color,
-              boxShadow: `0 8px 24px ${vibe.color}80, inset 0 2px 8px rgba(255, 255, 255, 0.3)`,
-            }}
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.3 }}
-          >
-            <div>
-              <h1 
-                style={{
-                  fontFamily: 'Poppins, sans-serif',
-                  fontSize: '24px',
-                  fontWeight: 700,
-                  color: '#03071E',
-                  marginBottom: '4px'
-                }}
-              >
-                {vibe.name}
-              </h1>
-              <p 
-                style={{
-                  fontFamily: 'Poppins, sans-serif',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  color: '#370617',
-                }}
-              >
-                {vibe.tags.join(' • ')}
-              </p>
-            </div>
-            <Heart className="w-6 h-6" style={{ color: '#03071E' }} />
-          </motion.div>
-        </div>
-
-        {/* BPM Graph Section */}
-        <div className="px-6 mb-6">
-          <h2 
-            className="mb-3"
-            style={{
-              fontFamily: 'Poppins, sans-serif',
-              fontSize: '18px',
-              fontWeight: 700,
-              color: '#EAE2B7',
-            }}
-          >
-            Your Heart Rate
-          </h2>
-          <div 
-            className="rounded-2xl p-4"
-            style={{
-              backgroundColor: 'rgba(0, 48, 73, 0.6)',
-              border: '1px solid rgba(252, 191, 73, 0.3)',
-            }}
-          >
-            <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={bpmData}>
-                <defs>
-                  <linearGradient id="colorBpm" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#F77F00" stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor="#F77F00" stopOpacity={0.1}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(252, 191, 73, 0.1)" />
-                <XAxis 
-                  dataKey="time" 
-                  stroke="#EAE2B7" 
-                  style={{ fontSize: '11px', fontFamily: 'Poppins, sans-serif' }}
-                />
-                <YAxis 
-                  stroke="#EAE2B7"
-                  style={{ fontSize: '11px', fontFamily: 'Poppins, sans-serif' }}
-                  domain={[100, 160]}
-                />
-                <Area 
-                  type="monotone" 
-                  dataKey="bpm" 
-                  stroke="#FCBF49" 
-                  strokeWidth={2}
-                  fill="url(#colorBpm)" 
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+      <div className="relative z-10 w-full h-full flex items-center justify-center px-6">
+        {loading ? (
+          <div className="text-center">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              className="w-16 h-16 mx-auto mb-4"
+              style={{
+                border: '4px solid rgba(252, 191, 73, 0.3)',
+                borderTopColor: '#FCBF49',
+                borderRadius: '50%'
+              }}
+            />
+            <p style={{ color: '#EAE2B7', fontSize: '16px' }}>Loading your queue...</p>
           </div>
-        </div>
-
-        {/* Curated Playlist Section */}
-        <div className="px-6 pb-6">
-          <h2 
-            className="mb-3"
-            style={{
-              fontFamily: 'Poppins, sans-serif',
-              fontSize: '18px',
-              fontWeight: 700,
-              color: '#EAE2B7',
-            }}
-          >
-            Curated Playlist
-          </h2>
-          <div className="space-y-3">
-            {playlistSongs.map((song, index) => (
-              <motion.div
-                key={song.id}
-                className="rounded-xl p-4 flex items-center gap-3"
-                style={{
-                  backgroundColor: 'rgba(0, 48, 73, 0.6)',
-                  border: '1px solid rgba(252, 191, 73, 0.2)',
-                }}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.3, delay: index * 0.1 }}
-              >
-                {/* Album Art Placeholder */}
-                <div 
-                  className="rounded-lg flex-shrink-0"
-                  style={{
-                    width: '50px',
-                    height: '50px',
-                    background: `linear-gradient(135deg, ${vibe.color}80 0%, ${vibe.color}40 100%)`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <span style={{ 
-                    fontFamily: 'Poppins, sans-serif', 
-                    fontSize: '12px', 
-                    fontWeight: 700,
-                    color: '#03071E'
-                  }}>
-                    {song.bpm}
-                  </span>
-                </div>
-                
-                {/* Song Info */}
-                <div className="flex-1 min-w-0">
-                  <h3 
-                    className="truncate"
-                    style={{
-                      fontFamily: 'Poppins, sans-serif',
-                      fontSize: '14px',
-                      fontWeight: 600,
-                      color: '#EAE2B7',
-                      marginBottom: '2px'
-                    }}
-                  >
-                    {song.title}
-                  </h3>
-                  <p 
-                    className="truncate"
-                    style={{
-                      fontFamily: 'Poppins, sans-serif',
-                      fontSize: '12px',
-                      color: '#EAE2B7',
-                      opacity: 0.7
-                    }}
-                  >
-                    {song.artist}
-                  </p>
-                </div>
-
-                {/* Duration */}
-                <span 
-                  style={{
-                    fontFamily: 'Poppins, sans-serif',
-                    fontSize: '12px',
-                    color: '#EAE2B7',
-                    marginRight: '8px',
-                    opacity: 0.7
-                  }}
-                >
-                  {song.duration}
-                </span>
-
-                {/* Play Button */}
-                <button
-                  className="rounded-full p-2 flex-shrink-0 transition-all"
-                  style={{
-                    background: 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)',
-                  }}
-                >
-                  <Play className="w-4 h-4 text-white fill-white" />
-                </button>
-              </motion.div>
-            ))}
+        ) : error ? (
+          <div className="text-center">
+            <p style={{ color: '#D62828', fontSize: '16px', marginBottom: '16px' }}>Error: {error}</p>
+            <button
+              onClick={onBack}
+              className="px-6 py-3 rounded-xl"
+              style={{
+                backgroundColor: '#FCBF49',
+                color: '#03071E',
+                fontFamily: 'Poppins, sans-serif',
+                fontWeight: 600
+              }}
+            >
+              Go Back
+            </button>
           </div>
-        </div>
+        ) : (
+          <div className="text-center">
+            <Music className="w-16 h-16 mx-auto mb-4" style={{ color: '#EAE2B7', opacity: 0.5 }} />
+            <p style={{ color: '#EAE2B7', opacity: 0.7 }}>No tracks found</p>
+          </div>
+        )}
       </div>
     </div>
   );

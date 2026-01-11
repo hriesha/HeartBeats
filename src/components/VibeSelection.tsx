@@ -1,7 +1,8 @@
 import { motion } from 'motion/react';
 import { ChevronLeft } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { heartbeatsApi, Cluster } from '../services/heartbeatsApi';
 import { VibeType } from '../App';
-import { useState } from 'react';
 
 interface VibeSelectionProps {
   bpm: number;
@@ -9,36 +10,68 @@ interface VibeSelectionProps {
   onBack: () => void;
 }
 
-const vibes: VibeType[] = [
-  {
-    id: 'chill',
-    name: 'Chill Flow',
-    color: '#EAE2B7',
-    tags: ['lo-fi', 'calm']
-  },
-  {
-    id: 'focus',
-    name: 'Focus Pulse',
-    color: '#FCBF49',
-    tags: ['deep work', 'concentration']
-  },
-  {
-    id: 'energize',
-    name: 'Energy Rush',
-    color: '#F77F00',
-    tags: ['upbeat', 'motivating']
-  },
-  {
-    id: 'intense',
-    name: 'Intense Beats',
-    color: '#D62828',
-    tags: ['powerful', 'high-energy']
+// Color palette for clusters
+const CLUSTER_COLORS = ['#EAE2B7', '#FCBF49', '#F77F00', '#D62828', '#003049', '#D62828'];
+
+// Tag mappings based on tempo and energy
+const getTagsForCluster = (meanTempo: number, meanEnergy: number): string[] => {
+  if (meanTempo < 100) {
+    return meanEnergy < 0.5 ? ['calm', 'relaxing'] : ['chill', 'ambient'];
+  } else if (meanTempo < 130) {
+    return meanEnergy < 0.6 ? ['focused', 'steady'] : ['upbeat', 'motivating'];
+  } else {
+    return meanEnergy < 0.7 ? ['energetic', 'pumping'] : ['intense', 'high-energy'];
   }
-];
+};
+
+const getClusterName = (meanTempo: number, meanEnergy: number, index: number): string => {
+  if (meanTempo < 100) {
+    return meanEnergy < 0.5 ? 'Chill Flow' : 'Ambient Vibes';
+  } else if (meanTempo < 130) {
+    return meanEnergy < 0.6 ? 'Focus Pulse' : 'Steady Groove';
+  } else {
+    return meanEnergy < 0.7 ? 'Energy Rush' : 'Intense Beats';
+  }
+};
 
 export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps) {
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
+  const [clusters, setClusters] = useState<VibeType[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Fetch clusters when component mounts
+    const fetchClusters = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const response = await heartbeatsApi.getClusters(undefined, 4);
+        
+        if (response.success && response.data) {
+          const vibeClusters: VibeType[] = response.data.clusters.map((cluster: Cluster, index: number) => ({
+            id: `cluster-${cluster.cluster_id}`,
+            name: getClusterName(cluster.mean_tempo, cluster.mean_energy, cluster.cluster_id),
+            color: CLUSTER_COLORS[cluster.cluster_id % CLUSTER_COLORS.length],
+            tags: getTagsForCluster(cluster.mean_tempo, cluster.mean_energy),
+            clusterId: cluster.cluster_id,
+            meanTempo: cluster.mean_tempo,
+          }));
+          setClusters(vibeClusters);
+        } else {
+          setError(response.error || 'Failed to load clusters');
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchClusters();
+  }, []);
 
   const handleVibeClick = (vibe: VibeType) => {
     setSelectedVibe(vibe);
@@ -48,6 +81,62 @@ export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps)
       onVibeSelect(vibe);
     }, 800);
   };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="relative w-full h-full overflow-auto flex items-center justify-center" style={{ fontFamily: 'Poppins, sans-serif' }}>
+        <div 
+          className="absolute inset-0 z-0"
+          style={{
+            background: `linear-gradient(180deg, #003049 0%, #D62828 50%, #003049 100%)`
+          }}
+        />
+        <div className="relative z-10 text-center">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+            className="w-16 h-16 mx-auto mb-4"
+            style={{
+              border: '4px solid rgba(252, 191, 73, 0.3)',
+              borderTopColor: '#FCBF49',
+              borderRadius: '50%'
+            }}
+          />
+          <p style={{ color: '#EAE2B7', fontSize: '16px' }}>Loading your vibes...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="relative w-full h-full overflow-auto flex items-center justify-center" style={{ fontFamily: 'Poppins, sans-serif' }}>
+        <div 
+          className="absolute inset-0 z-0"
+          style={{
+            background: `linear-gradient(180deg, #003049 0%, #D62828 50%, #003049 100%)`
+          }}
+        />
+        <div className="relative z-10 text-center px-6">
+          <p style={{ color: '#D62828', fontSize: '16px', marginBottom: '16px' }}>Error: {error}</p>
+          <button
+            onClick={onBack}
+            className="px-6 py-3 rounded-xl"
+            style={{
+              backgroundColor: '#FCBF49',
+              color: '#03071E',
+              fontFamily: 'Poppins, sans-serif',
+              fontWeight: 600
+            }}
+          >
+            Go Back
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative w-full h-full overflow-auto" style={{ fontFamily: 'Poppins, sans-serif' }}>
@@ -129,187 +218,68 @@ export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps)
               lineHeight: 1.5
             }}
           >
-            we've clustered your tracks into 4 moods. pick how you want to feel.
+            we've clustered your tracks into {clusters.length} moods. pick how you want to feel.
           </p>
         </div>
 
         {/* Vibe Bubbles */}
         <div className="flex-1 flex items-center justify-center">
           <div className="relative w-full" style={{ height: '400px' }}>
-            {/* Top Left */}
-            <motion.button
-              onClick={() => handleVibeClick(vibes[0])}
-              className="absolute"
-              style={{
-                top: '10%',
-                left: '5%',
-                width: '140px',
-                height: '140px',
-                borderRadius: '50%',
-                backgroundColor: vibes[0].color,
-                boxShadow: `0 8px 24px rgba(234, 226, 183, 0.4), inset 0 2px 8px rgba(255, 255, 255, 0.3)`,
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '16px'
-              }}
-              animate={{
-                y: [0, -15, 0],
-                x: [0, 10, 0],
-              }}
-              transition={{
-                duration: 4,
-                repeat: Infinity,
-                ease: "easeInOut"
-              }}
-              whileHover={{ 
-                scale: 1.1,
-                boxShadow: `0 12px 32px rgba(234, 226, 183, 0.6), inset 0 2px 8px rgba(255, 255, 255, 0.3)`
-              }}
-              whileTap={{ scale: 0.95 }}
-            >
-              <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '16px', fontWeight: 700, color: '#370617', textAlign: 'center', lineHeight: 1.2 }}>
-                {vibes[0].name}
-              </span>
-              <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '11px', fontWeight: 500, color: '#6A040F', marginTop: '4px' }}>
-                {vibes[0].tags.join(' • ')}
-              </span>
-            </motion.button>
-
-            {/* Top Right */}
-            <motion.button
-              onClick={() => handleVibeClick(vibes[1])}
-              className="absolute"
-              style={{
-                top: '15%',
-                right: '8%',
-                width: '150px',
-                height: '150px',
-                borderRadius: '50%',
-                backgroundColor: vibes[1].color,
-                boxShadow: `0 8px 24px rgba(252, 191, 73, 0.4), inset 0 2px 8px rgba(255, 255, 255, 0.3)`,
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '16px'
-              }}
-              animate={{
-                y: [0, 20, 0],
-                x: [0, -8, 0],
-              }}
-              transition={{
-                duration: 5,
-                repeat: Infinity,
-                ease: "easeInOut",
-                delay: 0.5
-              }}
-              whileHover={{ 
-                scale: 1.1,
-                boxShadow: `0 12px 32px rgba(252, 191, 73, 0.6), inset 0 2px 8px rgba(255, 255, 255, 0.3)`
-              }}
-              whileTap={{ scale: 0.95 }}
-            >
-              <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '16px', fontWeight: 700, color: '#03071E', textAlign: 'center', lineHeight: 1.2 }}>
-                {vibes[1].name}
-              </span>
-              <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '11px', fontWeight: 500, color: '#370617', marginTop: '4px' }}>
-                {vibes[1].tags.join(' • ')}
-              </span>
-            </motion.button>
-
-            {/* Bottom Left */}
-            <motion.button
-              onClick={() => handleVibeClick(vibes[2])}
-              className="absolute"
-              style={{
-                bottom: '20%',
-                left: '12%',
-                width: '145px',
-                height: '145px',
-                borderRadius: '50%',
-                backgroundColor: vibes[2].color,
-                boxShadow: `0 8px 24px rgba(247, 127, 0, 0.4), inset 0 2px 8px rgba(255, 255, 255, 0.3)`,
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '16px'
-              }}
-              animate={{
-                y: [0, -18, 0],
-                x: [0, 12, 0],
-              }}
-              transition={{
-                duration: 4.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-                delay: 1
-              }}
-              whileHover={{ 
-                scale: 1.1,
-                boxShadow: `0 12px 32px rgba(247, 127, 0, 0.6), inset 0 2px 8px rgba(255, 255, 255, 0.3)`
-              }}
-              whileTap={{ scale: 0.95 }}
-            >
-              <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '16px', fontWeight: 700, color: '#03071E', textAlign: 'center', lineHeight: 1.2 }}>
-                {vibes[2].name}
-              </span>
-              <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '11px', fontWeight: 500, color: '#370617', marginTop: '4px' }}>
-                {vibes[2].tags.join(' • ')}
-              </span>
-            </motion.button>
-
-            {/* Bottom Right */}
-            <motion.button
-              onClick={() => handleVibeClick(vibes[3])}
-              className="absolute"
-              style={{
-                bottom: '15%',
-                right: '5%',
-                width: '155px',
-                height: '155px',
-                borderRadius: '50%',
-                backgroundColor: vibes[3].color,
-                boxShadow: `0 8px 24px rgba(214, 40, 40, 0.4), inset 0 2px 8px rgba(255, 255, 255, 0.3)`,
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '16px'
-              }}
-              animate={{
-                y: [0, 22, 0],
-                x: [0, -15, 0],
-              }}
-              transition={{
-                duration: 5.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-                delay: 1.5
-              }}
-              whileHover={{ 
-                scale: 1.1,
-                boxShadow: `0 12px 32px rgba(214, 40, 40, 0.6), inset 0 2px 8px rgba(255, 255, 255, 0.3)`
-              }}
-              whileTap={{ scale: 0.95 }}
-            >
-              <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '16px', fontWeight: 700, color: '#370617', textAlign: 'center', lineHeight: 1.2 }}>
-                {vibes[3].name}
-              </span>
-              <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '11px', fontWeight: 500, color: '#6A040F', marginTop: '4px' }}>
-                {vibes[3].tags.join(' • ')}
-              </span>
-            </motion.button>
+            {clusters.map((vibe, index) => {
+              const positions = [
+                { top: '10%', left: '5%' },
+                { top: '15%', right: '8%' },
+                { bottom: '20%', left: '12%' },
+                { bottom: '15%', right: '5%' },
+              ];
+              const position = positions[index % positions.length];
+              const delays = [0, 0.5, 1, 1.5];
+              
+              return (
+                <motion.button
+                  key={vibe.id}
+                  onClick={() => handleVibeClick(vibe)}
+                  className="absolute"
+                  style={{
+                    ...position,
+                    width: '140px',
+                    height: '140px',
+                    borderRadius: '50%',
+                    backgroundColor: vibe.color,
+                    boxShadow: `0 8px 24px ${vibe.color}80, inset 0 2px 8px rgba(255, 255, 255, 0.3)`,
+                    border: 'none',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '16px'
+                  }}
+                  animate={{
+                    y: [0, index % 2 === 0 ? -15 : 20, 0],
+                    x: [0, index % 2 === 0 ? 10 : -8, 0],
+                  }}
+                  transition={{
+                    duration: 4 + index * 0.5,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                    delay: delays[index] || 0
+                  }}
+                  whileHover={{ 
+                    scale: 1.1,
+                    boxShadow: `0 12px 32px ${vibe.color}CC, inset 0 2px 8px rgba(255, 255, 255, 0.3)`
+                  }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '16px', fontWeight: 700, color: '#03071E', textAlign: 'center', lineHeight: 1.2 }}>
+                    {vibe.name}
+                  </span>
+                  <span style={{ fontFamily: 'Poppins, sans-serif', fontSize: '11px', fontWeight: 500, color: '#370617', marginTop: '4px' }}>
+                    {vibe.tags.join(' • ')}
+                  </span>
+                </motion.button>
+              );
+            })}
           </div>
         </div>
 
