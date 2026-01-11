@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PhoneFrame } from './components/PhoneFrame';
 import { LoginScreen } from './components/LoginScreen';
+import { SpotifyConnect } from './components/SpotifyConnect';
 import { ControlOptions } from './components/ControlOptions';
 import { BPMSelection } from './components/BPMSelection';
 import { WorkoutSelection } from './components/WorkoutSelection';
@@ -16,11 +17,19 @@ export type VibeType = {
 };
 
 export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<'login' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'detail' | 'trackerConnected'>('login');
+  const [currentScreen, setCurrentScreen] = useState<'login' | 'spotify' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'detail' | 'trackerConnected'>('login');
   const [selectedBPM, setSelectedBPM] = useState(120);
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
 
   const handleLogin = () => {
+    setCurrentScreen('spotify');
+  };
+
+  const handleSpotifyConnected = () => {
+    setCurrentScreen('controlOptions');
+  };
+
+  const handleSpotifySkip = () => {
     setCurrentScreen('controlOptions');
   };
 
@@ -77,6 +86,8 @@ export default function App() {
     } else if (currentScreen === 'bpm') {
       setCurrentScreen('controlOptions');
     } else if (currentScreen === 'controlOptions') {
+      setCurrentScreen('spotify');
+    } else if (currentScreen === 'spotify') {
       setCurrentScreen('login');
     }
   };
@@ -85,6 +96,7 @@ export default function App() {
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
       <PhoneFrame>
         {currentScreen === 'login' && <LoginScreen onLogin={handleLogin} />}
+        {currentScreen === 'spotify' && <SpotifyConnect onConnected={handleSpotifyConnected} onSkip={handleSpotifySkip} onBack={handleBack} />}
         {currentScreen === 'controlOptions' && <ControlOptions onSelectCustom={handleSelectCustomControls} onSelectWatch={handleSelectWatch} onBack={handleBack} />}
         {currentScreen === 'bpm' && <BPMSelection onSubmit={handleBPMSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}
