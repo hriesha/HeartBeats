@@ -24,9 +24,12 @@ export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps)
       setError(null);
 
       try {
-        const result = await runClustering(bpm, 4);
+        // Pass null for n_clusters to enable auto-determination
+        // This ensures dynamic k selection based on library
+        const result = await runClustering(bpm, null);
         if (result && result.clusters) {
           setClusters(result.clusters);
+          console.log(`Clusters loaded for BPM ${bpm}:`, result.clusters);
         } else {
           setError('Failed to load clusters. Please make sure you have saved tracks in your Spotify library.');
         }
@@ -39,7 +42,7 @@ export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps)
     };
 
     fetchClusters();
-  }, [bpm]);
+  }, [bpm]); // Re-fetch when BPM changes
 
   const handleVibeClick = (cluster: Cluster) => {
     // Convert Cluster to VibeType

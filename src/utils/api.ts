@@ -87,18 +87,24 @@ export async function connectSpotify(): Promise<{ success: boolean; user?: any; 
 
 /**
  * Run clustering on user's tracks
+ * @param bpm - Target BPM (clustering will be optimized for this BPM)
+ * @param nClusters - Number of clusters (null/undefined for auto-determination)
  */
-export async function runClustering(bpm: number, nClusters: number = 4): Promise<ClusteringResponse | null> {
+export async function runClustering(bpm: number, nClusters: number | null = null): Promise<ClusteringResponse | null> {
   try {
+    const body: any = { bpm };
+    // Only include n_clusters if explicitly provided (not null)
+    // This allows backend to auto-determine optimal k
+    if (nClusters !== null && nClusters !== undefined) {
+      body.n_clusters = nClusters;
+    }
+
     const response = await fetch(`${API_BASE_URL}/cluster`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        bpm,
-        n_clusters: nClusters,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {

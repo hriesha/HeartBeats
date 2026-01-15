@@ -22,6 +22,18 @@ from sklearn.metrics import silhouette_score
 
 log = logging.getLogger("improved_kmeans_knn")
 
+# Import cluster naming
+try:
+    from algorithms.cluster_naming import generate_cluster_names
+    CLUSTER_NAMING_AVAILABLE = True
+except ImportError:
+    try:
+        from cluster_naming import generate_cluster_names
+        CLUSTER_NAMING_AVAILABLE = True
+    except ImportError:
+        log.warning("Cluster naming module not available")
+        CLUSTER_NAMING_AVAILABLE = False
+
 # ==================== FEATURE CONFIGURATION ====================
 
 # Features for clustering (all features that define a "vibe")
@@ -48,14 +60,24 @@ KNN_FEATURES = [
 
 # Feature weights for KNN (higher = more important)
 # Tempo should be weighted highest for BPM matching
-FEATURE_WEIGHTS = {
+FEATURE_WEIGHTS_KNN = {
     "tempo": 3.0,           # Most important for BPM matching
     "energy": 1.5,          # Important for workout intensity
     "danceability": 1.2,    # Important for rhythm
     "valence": 1.0,         # Mood
     "loudness": 0.8,        # Less critical
-    "acousticness": 1.0,    # For clustering
-    "instrumentalness": 1.0, # For clustering
+}
+
+# Feature weights for CLUSTERING (tempo should dominate)
+# These are base weights - tempo weight will be amplified based on BPM
+FEATURE_WEIGHTS_CLUSTERING = {
+    "tempo": 5.0,           # MUCH higher weight for clustering (BPM is primary)
+    "energy": 1.0,
+    "danceability": 1.0,
+    "valence": 1.0,
+    "loudness": 0.8,
+    "acousticness": 0.9,
+    "instrumentalness": 0.9,
 }
 
 
@@ -85,11 +107,12 @@ def normalize_tempo(tempo: float, allow_doubling: bool = True) -> List[float]:
     return tempos
 
 
-def get_feature_weights(feature_names: List[str]) -> np.ndarray:
+def get_feature_weights(feature_names: List[str], for_clustering: bool = False) -> np.ndarray:
     """Get weight vector for given feature names."""
+    weight_dict = FEATURE_WEIGHTS_CLUSTERING if for_clustering else FEATURE_WEIGHTS_KNN
     weights = []
     for feat in feature_names:
-        weights.append(FEATURE_WEIGHTS.get(feat, 1.0))
+        weights.append(weight_dict.get(feat, 1.0))
     return np.array(weights)
 
 
@@ -155,27 +178,94 @@ def determine_optimal_k(
     return best_k
 
 
-def run_improved_kmeans(
+def filter_tracks_by_bpm(
     df: pd.DataFrame,
-    n_clusters: Optional[int] = None,
-    auto_k: bool = False,
-    random_state: int = 42
-) -> Tuple[pd.DataFrame, KMeans, StandardScaler, Dict[str, Any]]:
+    target_bpm: float,
+    bpm_tolerance: float = 30.0,
+    top_n: Optional[int] = None
+) -> pd.DataFrame:
     """
-    Run improved KMeans clustering with better feature selection and scaling.
+    STEP 1: Filter tracks by BPM using KNN.
+
+    First, we find tracks with tempo close to the target BPM.
+    This narrows down the dataset before clustering.
+
+    Args:
+        df: Full track DataFrame
+        target_bpm: Target BPM to filter around
+        bpm_tolerance: Maximum BPM distance (default ±30 BPM)
+        top_n: If provided, return top N closest tracks (None = all within tolerance)
 
     Returns:
-        - df with cluster assignments
+        Filtered DataFrame with tracks near target BPM
+    """
+    if "tempo" not in df.columns:
+        raise ValueError("DataFrame must have 'tempo' column")
+
+    # Calculate BPM distance
+    df = df.copy()
+    df["bpm_distance"] = np.abs(df["tempo"] - target_bpm)
+
+    # Filter by tolerance
+    if top_n is None:
+        # Return all tracks within tolerance
+        filtered = df[df["bpm_distance"] <= bpm_tolerance].copy()
+        log.info(f"Filtered {len(filtered)} tracks within ±{bpm_tolerance} BPM of {target_bpm} (from {len(df)} total)")
+    else:
+        # Return top N closest tracks
+        filtered = df.nsmallest(min(top_n, len(df)), "bpm_distance").copy()
+        log.info(f"Selected top {len(filtered)} tracks closest to {target_bpm} BPM (from {len(df)} total)")
+
+    # Drop helper column
+    if "bpm_distance" in filtered.columns:
+        filtered = filtered.drop(columns=["bpm_distance"])
+
+    return filtered
+
+
+def run_improved_kmeans(
+    df: pd.DataFrame,
+    target_bpm: Optional[float] = None,
+    n_clusters: Optional[int] = None,
+    auto_k: bool = False,
+    random_state: Optional[int] = None,
+    bpm_filter_first: bool = True,
+    bpm_tolerance: float = 30.0
+) -> Tuple[pd.DataFrame, KMeans, StandardScaler, Dict[str, Any]]:
+    """
+    Run improved KMeans clustering.
+
+    Flow:
+    1. If target_bpm provided: Filter tracks by BPM first (KNN-style filter)
+    2. Cluster filtered tracks by all audio features (creates "vibes")
+    3. KNN is run separately within each cluster to find best BPM matches
+
+    Args:
+        target_bpm: Target BPM - if provided, filters tracks first, then clusters
+        bpm_filter_first: If True and target_bpm provided, filter by BPM before clustering
+        bpm_tolerance: BPM range for filtering (default ±30 BPM)
+
+    Returns:
+        - df with cluster assignments (filtered if bpm_filter_first=True)
         - fitted KMeans model
         - fitted scaler
         - metadata dict with cluster info
     """
-    # Determine features to use
+    # STEP 1: Filter by BPM if target provided
+    original_size = len(df)
+    if target_bpm and bpm_filter_first:
+        df = filter_tracks_by_bpm(df, target_bpm, bpm_tolerance=bpm_tolerance)
+        log.info(f"BPM filter: {len(df)} tracks (from {original_size}) near {target_bpm} BPM")
+
+        if len(df) < 10:
+            log.warning(f"Very few tracks ({len(df)}) after BPM filtering. Consider increasing tolerance.")
+
+    # Determine features to use (all features, not just tempo)
     features = [f for f in CLUSTERING_FEATURES if f in df.columns]
     if len(features) == 0:
         raise ValueError("No clustering features available in DataFrame")
 
-    log.info(f"Using {len(features)} features for clustering: {features}")
+    log.info(f"Clustering {len(df)} tracks using {len(features)} features: {features}")
 
     # Extract and clean features
     X = df[features].copy()
@@ -194,51 +284,125 @@ def run_improved_kmeans(
     if len(X) == 0:
         raise ValueError("No valid feature data after cleaning")
 
-    # Determine k
+    # No tempo transformation needed - we already filtered by BPM
+    # Now we cluster by ALL features equally to create meaningful "vibes"
+
+    # Determine k - default to auto if not specified
+    if n_clusters is None:
+        auto_k = True  # Always use dynamic k by default
     if auto_k:
         n_clusters = determine_optimal_k(df_filtered)
+        log.info(f"Auto-determined optimal k: {n_clusters} clusters")
     elif n_clusters is None:
-        n_clusters = 4  # Default
+        n_clusters = 4  # Fallback default
 
-    log.info(f"Running KMeans with k={n_clusters}")
+    log.info(f"Running KMeans with k={n_clusters}, BPM-aware: {target_bpm is not None}")
 
     # Use RobustScaler - handles outliers better than StandardScaler
     scaler = RobustScaler()
     X_scaled = scaler.fit_transform(X)
 
+    # No special weighting needed - we already filtered by BPM
+    # Now cluster by all features equally to create different "vibes"
+    # Each cluster represents a different musical style/mood within the BPM range
+    X_weighted = X_scaled
+
+    # Use consistent random_state for reproducibility
+    clustering_random_state = random_state or 42
+
+    log.info(f"Clustering {len(X_weighted)} filtered tracks into {n_clusters} vibes based on all features")
+
     # Run KMeans with multiple initializations
     km = KMeans(
         n_clusters=n_clusters,
-        random_state=random_state,
+        random_state=clustering_random_state,
         n_init=10,  # Try 10 different initializations
         max_iter=300
     )
-    clusters = km.fit_predict(X_scaled)
+    clusters = km.fit_predict(X_weighted)
 
     # Add cluster assignments
     df_filtered = df_filtered.copy()
     df_filtered["cluster"] = clusters
 
-    # Calculate cluster statistics
-    cluster_info = []
-    for cid in range(n_clusters):
-        cluster_tracks = df_filtered[df_filtered["cluster"] == cid]
-        if len(cluster_tracks) > 0:
-            cluster_info.append({
-                "id": cid,
-                "size": len(cluster_tracks),
-                "mean_tempo": float(cluster_tracks["tempo"].mean()),
-                "std_tempo": float(cluster_tracks["tempo"].std()),
-                "mean_energy": float(cluster_tracks["energy"].mean()) if "energy" in cluster_tracks.columns else 0.0,
-                "mean_danceability": float(cluster_tracks["danceability"].mean()) if "danceability" in cluster_tracks.columns else 0.0,
-                "mean_valence": float(cluster_tracks["valence"].mean()) if "valence" in cluster_tracks.columns else 0.0,
-            })
+    # Generate dynamic cluster names and metadata
+    if CLUSTER_NAMING_AVAILABLE:
+        try:
+            cluster_info_list = generate_cluster_names(
+                df_filtered,
+                user_library_size=len(df_filtered)
+            )
+            # Convert to simple list format for metadata
+            cluster_info = [
+                {
+                    "id": c["id"],
+                    "size": c["track_count"],
+                    "name": c["name"],
+                    "tags": c["tags"],
+                    "color": c["color"],
+                    "mean_tempo": c["mean_tempo"],
+                    "std_tempo": float(df_filtered[df_filtered["cluster"] == c["id"]]["tempo"].std()),
+                    "mean_energy": c["mean_energy"],
+                    "mean_danceability": c["mean_danceability"],
+                    "mean_valence": c["mean_valence"],
+                }
+                for c in cluster_info_list
+            ]
+            log.info(f"Generated dynamic names for {len(cluster_info)} clusters")
+        except Exception as e:
+            log.warning(f"Dynamic cluster naming failed, using defaults: {e}")
+            # Fallback to basic naming
+            cluster_info = []
+            color_palette = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049"]
+            for cid in range(n_clusters):
+                cluster_tracks = df_filtered[df_filtered["cluster"] == cid]
+                if len(cluster_tracks) > 0:
+                    cluster_info.append({
+                        "id": cid,
+                        "size": len(cluster_tracks),
+                        "name": f"Cluster {cid + 1}",
+                        "tags": [],
+                        "color": color_palette[cid % len(color_palette)],
+                        "mean_tempo": float(cluster_tracks["tempo"].mean()),
+                        "std_tempo": float(cluster_tracks["tempo"].std()),
+                        "mean_energy": float(cluster_tracks["energy"].mean()) if "energy" in cluster_tracks.columns else 0.0,
+                        "mean_danceability": float(cluster_tracks["danceability"].mean()) if "danceability" in cluster_tracks.columns else 0.0,
+                        "mean_valence": float(cluster_tracks["valence"].mean()) if "valence" in cluster_tracks.columns else 0.0,
+                    })
+    else:
+        # Fallback: basic naming
+        cluster_info = []
+        color_palette = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049"]
+        for cid in range(n_clusters):
+            cluster_tracks = df_filtered[df_filtered["cluster"] == cid]
+            if len(cluster_tracks) > 0:
+                cluster_info.append({
+                    "id": cid,
+                    "size": len(cluster_tracks),
+                    "name": f"Cluster {cid + 1}",
+                    "tags": [],
+                    "color": color_palette[cid % len(color_palette)],
+                    "mean_tempo": float(cluster_tracks["tempo"].mean()),
+                    "std_tempo": float(cluster_tracks["tempo"].std()),
+                    "mean_energy": float(cluster_tracks["energy"].mean()) if "energy" in cluster_tracks.columns else 0.0,
+                    "mean_danceability": float(cluster_tracks["danceability"].mean()) if "danceability" in cluster_tracks.columns else 0.0,
+                    "mean_valence": float(cluster_tracks["valence"].mean()) if "valence" in cluster_tracks.columns else 0.0,
+                })
+
+    # Calculate silhouette on weighted features if BPM-aware
+    score_data = X_weighted if target_bpm else X_scaled
+    # Calculate silhouette on scaled features
+    silhouette = silhouette_score(X_scaled, clusters) if len(np.unique(clusters)) > 1 else 0.0
 
     metadata = {
         "n_clusters": n_clusters,
         "features_used": features,
         "cluster_info": cluster_info,
-        "silhouette_score": silhouette_score(X_scaled, clusters) if len(np.unique(clusters)) > 1 else 0.0,
+        "silhouette_score": silhouette,
+        "target_bpm": target_bpm,
+        "bpm_filtered": target_bpm is not None and bpm_filter_first,
+        "original_track_count": original_size,
+        "filtered_track_count": len(df_filtered),
     }
 
     log.info(f"Clustering complete: {n_clusters} clusters, silhouette={metadata['silhouette_score']:.3f}")
@@ -279,13 +443,22 @@ def build_weighted_query_point(
 
 def improved_knn_in_cluster(
     df: pd.DataFrame,
-    scaler: StandardScaler,
+    scaler,
     target_bpm: float,
     cluster_id: int,
     topk: int = 10,
     use_weights: bool = True,
     allow_tempo_variants: bool = True,
+    clustering_features: Optional[List[str]] = None,
 ) -> pd.DataFrame:
+    """
+    STEP 3: Run KNN within a specific cluster to find best BPM matches.
+
+    This is the final step:
+    1. We already filtered by BPM (step 1)
+    2. We already clustered into vibes (step 2)
+    3. Now we fine-tune within each cluster to find top-K songs closest to target BPM
+    """
     """
     Improved KNN matching with weighted distances and better query point.
 
@@ -293,6 +466,10 @@ def improved_knn_in_cluster(
     - Weighted feature distances (tempo weighted higher)
     - Better query point construction
     - Optional tempo variant matching (half/double time)
+
+    Args:
+        clustering_features: The features that were used for clustering (must match scaler).
+                            If None, will try to infer from available features.
     """
     # Filter to cluster
     df_cluster = df[df["cluster"] == cluster_id].copy()
@@ -301,10 +478,16 @@ def improved_knn_in_cluster(
         log.warning(f"Cluster {cluster_id} is empty")
         return pd.DataFrame()
 
-    # Determine features to use
-    features = [f for f in KNN_FEATURES if f in df_cluster.columns]
-    if len(features) == 0:
+    # Use the same features that were used for clustering (to match scaler)
+    if clustering_features:
+        features = [f for f in clustering_features if f in df_cluster.columns]
+    else:
+        # Try to infer from CLUSTERING_FEATURES
         features = [f for f in CLUSTERING_FEATURES if f in df_cluster.columns]
+
+    # Fallback to KNN_FEATURES if needed
+    if len(features) == 0:
+        features = [f for f in KNN_FEATURES if f in df_cluster.columns]
 
     if len(features) == 0:
         raise ValueError("No KNN features available")
@@ -332,9 +515,9 @@ def improved_knn_in_cluster(
     query_point = build_weighted_query_point(target_bpm, df_filtered, features)
     query_scaled = scaler.transform(query_point)
 
-    # Get feature weights
+    # Get feature weights (for KNN, not clustering)
     if use_weights:
-        weights = get_feature_weights(features)
+        weights = get_feature_weights(features, for_clustering=False)
         # Apply weights to scaled features
         X_weighted = X_scaled * weights
         query_weighted = query_scaled * weights
