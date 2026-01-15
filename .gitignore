@@ -35,3 +35,7 @@ yarn-error.log*
 
 # App Icons (large binary files)
 AppIcons/
+annas_archive_data/
+*.log
+__pycache__/
+*.pyc
