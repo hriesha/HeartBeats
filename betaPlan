@@ -1,0 +1,464 @@
+# HeartBeats - First Beta Launch Plan (1 Week)
+
+## Goal
+Launch iOS app via TestFlight for beta testers by end of week.
+
+**Target Users**: Casual runners/joggers who signed up via Google Form
+
+---
+
+## TECHNICAL CHANGES FOR BETA
+
+### 1. UI Changes
+- **Remove signup** - Just Spotify OAuth for fresh logins
+- **BPM Range**: 60-210 BPM (was 80-180)
+- **BPM Threshold**: ±10 BPM tolerance
+- **Zone Buffer**: 20-second grace period before switching songs when BPM changes
+
+### 2. Algorithm Changes: BPM Filter → GMM → KNN
+
+**Old Flow (K-Means + KNN):**
+```
+All Songs → K-Means Clustering → KNN to find matches
+```
+
+**New Flow (BPM Filter → GMM → KNN):**
+```
+All Songs → BPM Filter (±10) → GMM Clusters → User Selects Vibe → KNN within cluster
+```
+
+#### Step 1: Raw BPM Range Filter
+```python
+# Filter songs within BPM range first
+def filter_by_bpm(tracks_df, target_bpm, tolerance=10):
+    min_bpm = target_bpm - tolerance
+    max_bpm = target_bpm + tolerance
+    return tracks_df[(tracks_df['tempo'] >= min_bpm) & (tracks_df['tempo'] <= max_bpm)]
+```
+
+#### Step 2: GMM Clustering (Replace K-Means)
+```python
+from sklearn.mixture import GaussianMixture
+
+def cluster_with_gmm(tracks_df, n_clusters=4):
+    features = ['energy', 'danceability', 'valence', 'loudness']
+    X = tracks_df[features].values
+
+    # Standardize features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # GMM for soft clustering (probabilities)
+    gmm = GaussianMixture(n_components=n_clusters, random_state=42)
+    gmm.fit(X_scaled)
+
+    # Get cluster assignments AND probabilities
+    tracks_df['cluster'] = gmm.predict(X_scaled)
+    probabilities = gmm.predict_proba(X_scaled)
+
+    # Add probability columns for each cluster
+    for i in range(n_clusters):
+        tracks_df[f'prob_cluster_{i}'] = probabilities[:, i]
+
+    return tracks_df, gmm
+```
+
+#### Step 3: KNN Within Selected Cluster
+```python
+from sklearn.neighbors import NearestNeighbors
+
+def get_tracks_for_vibe(tracks_df, cluster_id, target_bpm, top_k=10):
+    # Filter to selected cluster
+    cluster_tracks = tracks_df[tracks_df['cluster'] == cluster_id]
+
+    if len(cluster_tracks) == 0:
+        return []
+
+    # Create query point
+    features = ['tempo', 'energy', 'danceability', 'valence', 'loudness']
+    X = cluster_tracks[features].values
+
+    # Standardize
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Query with target BPM + median features
+    query = [target_bpm,
+             cluster_tracks['energy'].median(),
+             cluster_tracks['danceability'].median(),
+             cluster_tracks['valence'].median(),
+             cluster_tracks['loudness'].median()]
+    query_scaled = scaler.transform([query])
+
+    # KNN
+    knn = NearestNeighbors(n_neighbors=min(top_k, len(cluster_tracks)))
+    knn.fit(X_scaled)
+    distances, indices = knn.kneighbors(query_scaled)
+
+    return cluster_tracks.iloc[indices[0]].to_dict('records')
+```
+
+### 3. Crossfade Implementation
+
+#### Option A: Spotify Web Playback SDK (Preferred)
+The Spotify Web Playback SDK allows streaming on web but has limited crossfade control.
+- Use `player.resume()` and `player.pause()` with timing
+- For iOS, use Spotify iOS SDK's `SPTAppRemote`
+
+#### Option B: Custom Crossfade (If Spotify doesn't support)
+```typescript
+// Simple crossfade logic
+async function crossfadeToTrack(newTrackUri: string, fadeDuration: number = 3000) {
+  const fadeSteps = 30; // 30 steps over fade duration
+  const stepDuration = fadeDuration / fadeSteps;
+
+  // Start next track at 0 volume
+  await SpotifyRemote.playUri(newTrackUri);
+  await SpotifyRemote.setVolume(0);
+
+  // Gradually fade: current track down, new track up
+  for (let i = 0; i <= fadeSteps; i++) {
+    const progress = i / fadeSteps;
+    // Current track fades out, new track fades in
+    // Note: May need to manage two players for true crossfade
+    await new Promise(resolve => setTimeout(resolve, stepDuration));
+  }
+}
+```
+
+### 4. API Output for Dynamic Playback
+
+#### Endpoint: POST /api/tracks
+**Request:**
+```json
+{
+  "bpm": 130,
+  "tolerance": 10,
+  "cluster_id": 2,
+  "top_k": 10
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "tracks": [
+    {
+      "spotify_uri": "spotify:track:abc123",
+      "name": "Song Name",
+      "artists": "Artist Name",
+      "tempo": 128,
+      "energy": 0.85,
+      "cluster_probability": 0.78,
+      "distance": 0.12
+    }
+  ],
+  "next_track_uri": "spotify:track:abc123",
+  "queue_updated": true
+}
+```
+
+The API returns `next_track_uri` for immediate playback, and the list updates as BPM changes.
+
+### 5. Zone Buffer Logic
+
+```typescript
+// 20-second buffer before zone change
+const ZONE_BUFFER_MS = 20000;
+let lastZoneChangeTime = 0;
+let pendingZone: Zone | null = null;
+
+function onHeartRateUpdate(bpm: number) {
+  const newZone = calculateZone(bpm);
+
+  if (newZone !== currentZone) {
+    const now = Date.now();
+
+    if (pendingZone === newZone) {
+      // Same pending zone - check if buffer elapsed
+      if (now - lastZoneChangeTime >= ZONE_BUFFER_MS) {
+        // Confirmed zone change - trigger track change
+        currentZone = newZone;
+        fetchNewTracksForZone(newZone);
+        pendingZone = null;
+      }
+    } else {
+      // New pending zone - start buffer
+      pendingZone = newZone;
+      lastZoneChangeTime = now;
+    }
+  } else {
+    // Returned to current zone - cancel pending
+    pendingZone = null;
+  }
+}
+```
+
+---
+
+## WEEK 1 TIMELINE
+
+### Day 1 (Today): Setup
+
+#### Apple Developer Account
+- Go to https://developer.apple.com/programs/
+- Enroll as Individual ($99/year)
+- **Important**: Approval takes 24-48 hours - START NOW
+- Have payment method ready
+
+#### Initialize React Native Project
+```bash
+npx react-native@latest init HeartBeatsMobile --template react-native-template-typescript
+cd HeartBeatsMobile
+```
+
+#### Install Dependencies
+```bash
+# Navigation
+npm install @react-navigation/native @react-navigation/native-stack
+npm install react-native-screens react-native-safe-area-context
+
+# Animations
+npm install react-native-reanimated react-native-gesture-handler
+
+# Spotify SDK
+npm install react-native-spotify-remote
+
+# UI
+npm install @react-native-community/slider react-native-linear-gradient
+```
+
+#### Send Out Google Form
+- Create form with questions above
+- Share to runner communities, friends, social media
+
+### Day 2-3: Core Screens + Backend Algorithm
+
+#### Project Structure
+```
+HeartBeatsMobile/
+├── src/
+│   ├── screens/
+│   │   ├── WelcomeScreen.tsx       # Logo + "Connect with Spotify" (no signup!)
+│   │   ├── BPMScreen.tsx           # Circular BPM dial (60-210, ±10)
+│   │   ├── VibeScreen.tsx          # GMM cluster bubbles with probabilities
+│   │   └── QueueScreen.tsx         # Dynamic track list + crossfade
+│   ├── components/
+│   │   ├── BPMDial.tsx             # Circular slider (60-210 range)
+│   │   ├── VibeBubble.tsx          # Shows cluster + probability %
+│   │   ├── TrackCard.tsx           # Song card with BPM badge
+│   │   └── PulsingHeart.tsx        # Heartbeat animation
+│   ├── services/
+│   │   ├── api.ts                  # Backend API client
+│   │   ├── spotify.ts              # Spotify SDK wrapper
+│   │   └── playback.ts             # Crossfade + zone buffer logic
+│   ├── hooks/
+│   │   └── useZoneBuffer.ts        # 20-second zone change buffer
+│   ├── navigation/
+│   │   └── AppNavigator.tsx
+│   └── theme/
+│       └── colors.ts
+├── ios/
+└── android/
+```
+
+#### Screens to Build (No Signup)
+1. **WelcomeScreen** - Logo, tagline, "Connect with Spotify" button (direct OAuth)
+2. **BPMScreen** - Circular dial (60-210 BPM), ±10 tolerance displayed, zone buffer indicator
+3. **VibeScreen** - 4 GMM cluster bubbles showing probability %, tap to select
+4. **QueueScreen** - Dynamic track list, now playing, crossfade controls
+
+#### Backend Algorithm Update
+**File to modify:** `api/heartbeats_api.py`
+- Replace K-Means with GMM (`sklearn.mixture.GaussianMixture`)
+- Add raw BPM filter before clustering
+- Return cluster probabilities in API response
+- Keep KNN for final track selection within cluster
+
+### Day 4: Vibrant UI Polish
+
+#### Color Palette
+```typescript
+// src/theme/colors.ts
+export const colors = {
+  gradients: {
+    sunrise: ['#FF6B35', '#F7C59F'],
+    sunset: ['#FF006E', '#8338EC'],
+    ocean: ['#00B4D8', '#90E0EF'],
+    forest: ['#06D6A0', '#1B9AAA'],
+  },
+  zones: {
+    rest: '#90E0EF',
+    warmup: '#FFD166',
+    cardio: '#F77F00',
+    peak: '#D62828',
+  },
+  background: '#0A0A0F',
+  text: '#FFFFFF',
+  textSecondary: 'rgba(255,255,255,0.6)',
+};
+```
+
+#### Animations (using Reanimated)
+- BPM dial pulses at selected tempo
+- Vibe bubbles float with parallax
+- Screen transitions fade/slide smoothly
+- Buttons bounce on tap
+
+### Day 5: Spotify Integration
+
+#### Spotify Dashboard Setup
+1. Go to https://developer.spotify.com/dashboard
+2. Create new app "HeartBeats"
+3. Add redirect URI: `heartbeats://spotify-callback`
+4. Note Client ID
+
+#### iOS Configuration
+Add to `ios/HeartBeatsMobile/Info.plist`:
+```xml
+<key>CFBundleURLTypes</key>
+<array>
+  <dict>
+    <key>CFBundleURLSchemes</key>
+    <array>
+      <string>heartbeats</string>
+    </array>
+  </dict>
+</array>
+```
+
+#### Connect to Backend
+- Your Flask backend is already working
+- Update API base URL for production
+- Test clustering endpoint from iOS
+
+### Day 6: TestFlight Setup
+
+#### Xcode Configuration
+1. Open `ios/HeartBeatsMobile.xcworkspace` in Xcode
+2. Signing & Capabilities → Select your team
+3. Set Bundle Identifier: `com.yourname.heartbeats`
+4. Set Deployment Target: iOS 15.0+
+
+#### App Store Connect
+1. Go to https://appstoreconnect.apple.com
+2. My Apps → "+" → New App
+3. Fill in:
+   - Platform: iOS
+   - Name: HeartBeats
+   - Bundle ID: (select from dropdown)
+   - SKU: heartbeats-beta-001
+
+#### Required for TestFlight
+- App Icon (1024x1024) - can be simple logo
+- Privacy Policy URL - use a free generator or simple page
+- Beta App Description: "Match your music to your heart rate while running"
+
+#### Build & Upload
+In Xcode:
+1. Product → Archive
+2. Distribute App → App Store Connect → Upload
+3. Wait for processing (~10-30 min)
+
+### Day 7: Launch Beta
+
+#### TestFlight Configuration
+1. App Store Connect → Your App → TestFlight
+2. Add Internal Testers (your team) - immediate access
+3. For External Testers (from survey):
+   - Submit for Beta App Review (24-48 hours)
+   - Create Public Link once approved
+   - Share link with survey respondents
+
+#### What to Test (tell testers)
+- Connect to Spotify
+- Select BPM with slider
+- Choose a vibe cluster
+- View track queue
+- Report any crashes or bugs
+
+---
+
+## Backend Deployment
+
+Your Flask backend needs to be accessible from iOS. Options:
+
+### Quick: Railway or Render
+```bash
+# Deploy to Railway
+railway login
+railway init
+railway up
+```
+
+### Environment Variables
+```
+SPOTIPY_CLIENT_ID=your_client_id
+SPOTIPY_CLIENT_SECRET=your_client_secret
+SPOTIPY_REDIRECT_URI=heartbeats://spotify-callback
+```
+
+---
+
+## Files to Create/Modify
+
+### React Native (New)
+| File | Purpose |
+|------|---------|
+| `src/screens/WelcomeScreen.tsx` | Logo + Connect with Spotify (no signup) |
+| `src/screens/BPMScreen.tsx` | Circular dial 60-210 BPM, ±10 display |
+| `src/screens/VibeScreen.tsx` | GMM clusters with probability % |
+| `src/screens/QueueScreen.tsx` | Dynamic queue + crossfade |
+| `src/components/BPMDial.tsx` | Circular slider (60-210 range) |
+| `src/components/VibeBubble.tsx` | Cluster bubble with probability |
+| `src/services/api.ts` | Backend API calls |
+| `src/services/spotify.ts` | Spotify SDK wrapper |
+| `src/services/playback.ts` | Crossfade + zone buffer logic |
+| `src/hooks/useZoneBuffer.ts` | 20-sec buffer before zone change |
+| `src/theme/colors.ts` | Color palette |
+
+### Backend (Modify)
+| File | Changes |
+|------|---------|
+| `api/heartbeats_api.py` | Replace K-Means with GMM, add BPM filter, return probabilities |
+| `algorithms/` | Create `gmm_clustering.py` with new algorithm |
+
+---
+
+## Verification Checklist
+
+### App Functionality
+- [ ] App launches without crash
+- [ ] Spotify OAuth works (no signup screen)
+- [ ] BPM dial range is 60-210
+- [ ] BPM tolerance ±10 displays correctly
+- [ ] Backend API reachable
+
+### Algorithm
+- [ ] BPM filter correctly filters songs by range
+- [ ] GMM clustering returns clusters with probabilities
+- [ ] Cluster probabilities display on vibe bubbles
+- [ ] KNN returns ranked tracks within selected cluster
+
+### Playback
+- [ ] Zone buffer waits 20 seconds before changing
+- [ ] Crossfade works between tracks (Spotify or custom)
+- [ ] Track queue updates when BPM changes
+
+### TestFlight
+- [ ] No placeholder text visible
+- [ ] App icon set (1024x1024)
+- [ ] Privacy policy URL accessible
+- [ ] Build uploads successfully
+
+---
+
+## Post-Beta Roadmap (After This Week)
+
+These will be planned after beta feedback:
+- Apple Music integration
+- HealthKit / Apple Watch heart rate
+- Dynamic crossfade between songs
+- Android version
+- UI refinements based on feedback
