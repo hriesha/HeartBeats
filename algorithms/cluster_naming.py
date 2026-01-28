@@ -131,10 +131,11 @@ def analyze_cluster_characteristics(
         }
 
         # Identify what makes this cluster unique
-        if stats["tempo_delta"] > 20:
-            stats["distinctiveness"]["unique_features"].append("tempo")
-        if stats["energy_delta"] > 0.2:
-            stats["distinctiveness"]["unique_features"].append("energy")
+        d = stats["distinctiveness"]
+        if d["tempo_delta"] > 20:
+            d["unique_features"].append("tempo")
+        if d["energy_delta"] > 0.2:
+            d["unique_features"].append("energy")
 
     return stats
 

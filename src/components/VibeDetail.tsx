@@ -1,8 +1,8 @@
 import { motion } from 'motion/react';
-import { ChevronLeft, Play, Music } from 'lucide-react';
+import { ChevronLeft, Play, Music, SkipForward } from 'lucide-react';
 import { VibeType } from '../App';
-import { useState, useEffect } from 'react';
-import { getClusterTracks, getTrackDetails, Track } from '../utils/api';
+import { useState, useEffect, useCallback } from 'react';
+import { getClusterTracks, getTrackDetails, getTracksFromTrack, startPlayback, Track } from '../utils/api';
 
 interface VibeDetailProps {
   vibe: VibeType;
@@ -10,65 +10,107 @@ interface VibeDetailProps {
   onBack: () => void;
 }
 
+function toUri(t: Track): string {
+  const id = t.id ?? t.track_id;
+  return id?.startsWith('spotify:') ? id : `spotify:track:${id}`;
+}
+
+function mergeWithDetails(knnTracks: Track[], details: Track[]): Track[] {
+  return knnTracks.map(knn => {
+    const spotify = details.find(
+      s => (s.id ?? s.track_id) === (knn.id ?? knn.track_id)
+    );
+    return { ...knn, ...spotify, rank: knn.rank, distance: knn.distance, tempo: knn.tempo };
+  });
+}
+
 export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [nowPlayingIndex, setNowPlayingIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Extract cluster ID from vibe ID (format: "cluster-0")
   const clusterId = parseInt(vibe.id.split('-')[1] || '0');
 
+  const playTrack = useCallback(async (index: number) => {
+    const t = tracks[index];
+    if (!t) return;
+    const res = await startPlayback([toUri(t)]);
+    if (!res.success) console.warn('startPlayback failed:', res.error);
+  }, [tracks]);
+
   useEffect(() => {
-    const fetchTracks = async () => {
+    let cancelled = false;
+
+    const run = async () => {
       setIsLoading(true);
       setError(null);
-
       try {
-        // Get KNN-matched tracks for this cluster
-        const clusterData = await getClusterTracks(clusterId, bpm, 10);
-
-        if (clusterData && clusterData.tracks && clusterData.tracks.length > 0) {
-          // Extract track IDs
-          const trackIds = clusterData.tracks.map(t => t.track_id).filter(Boolean);
-
-          // Get detailed track information from Spotify
-          const detailsResponse = await getTrackDetails(trackIds);
-
-          if (detailsResponse && detailsResponse.tracks) {
-            // Merge KNN data with Spotify details
-            const mergedTracks = clusterData.tracks.map(knnTrack => {
-              const spotifyTrack = detailsResponse.tracks.find(
-                st => st.id === knnTrack.track_id || st.track_id === knnTrack.track_id
-              );
-
-              return {
-                ...knnTrack,
-                ...spotifyTrack,
-                // Keep KNN metadata
-                rank: knnTrack.rank,
-                distance: knnTrack.distance,
-                tempo: knnTrack.tempo,
-              };
-            });
-
-            setTracks(mergedTracks);
-          } else {
-            // Fallback: use KNN tracks without Spotify details
-            setTracks(clusterData.tracks);
-          }
-        } else {
-          setError('No tracks found for this cluster. Please try another vibe.');
+        const clusterData = await getClusterTracks(clusterId, bpm, 15);
+        if (!clusterData?.tracks?.length) {
+          setError('No tracks found for this cluster. Try another vibe.');
+          return;
         }
+        const trackIds = clusterData.tracks.map(t => t.track_id).filter(Boolean);
+        const detailsResponse = await getTrackDetails(trackIds);
+        const merged = detailsResponse?.tracks
+          ? mergeWithDetails(clusterData.tracks, detailsResponse.tracks)
+          : clusterData.tracks;
+
+        if (cancelled) return;
+
+        const randomIdx = Math.floor(Math.random() * merged.length);
+        const randomTrack = merged[randomIdx];
+        const tid = randomTrack.track_id ?? randomTrack.id;
+        if (tid) await startPlayback([toUri(randomTrack)]);
+
+        const queueFromTrack = tid ? await getTracksFromTrack(tid, clusterId, 10) : null;
+        if (cancelled) return;
+
+        const queueList = queueFromTrack?.tracks ?? [];
+        const ids = queueList.map(t => t.track_id).filter(Boolean);
+        const det = ids.length ? await getTrackDetails(ids) : null;
+        const mergedQueue = det?.tracks ? mergeWithDetails(queueList, det.tracks) : queueList;
+        const filtered = mergedQueue.filter(
+          q => (q.track_id ?? q.id) !== tid
+        );
+        setTracks([randomTrack, ...filtered]);
+        setNowPlayingIndex(0);
       } catch (err) {
-        console.error('Error fetching tracks:', err);
-        setError('Failed to load tracks. Please try again.');
+        if (!cancelled) {
+          console.error('VibeDetail fetch error:', err);
+          setError('Failed to load tracks. Please try again.');
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
-    fetchTracks();
+    run();
+    return () => { cancelled = true; };
   }, [clusterId, bpm]);
+
+  const handleNext = async () => {
+    const nextIdx = nowPlayingIndex + 1;
+    if (nextIdx >= tracks.length) return;
+    const next = tracks[nextIdx];
+    const tid = next.track_id ?? next.id;
+    await playTrack(nextIdx);
+    setNowPlayingIndex(nextIdx);
+    if (!tid) return;
+    const from = await getTracksFromTrack(tid, clusterId, 10);
+    if (!from?.tracks?.length) return;
+    const ids = from.tracks.map(t => t.track_id).filter(Boolean);
+    const det = await getTrackDetails(ids);
+    const merged = det?.tracks ? mergeWithDetails(from.tracks, det.tracks) : from.tracks;
+    const add = merged.filter(m => (m.track_id ?? m.id) !== tid);
+    setTracks(prev => {
+      const rest = prev.slice(nextIdx + 1);
+      const seen = new Set(rest.map(t => t.track_id ?? t.id));
+      const extra = add.filter(m => !seen.has(m.track_id ?? m.id));
+      return [...prev.slice(0, nextIdx + 1), ...extra, ...rest];
+    });
+  };
 
   const formatDuration = (ms?: number): string => {
     if (!ms) return '0:00';
@@ -126,16 +168,18 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
               >
                 {vibe.name}
               </h1>
-              <p
-                style={{
-                  fontFamily: 'Poppins, sans-serif',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  color: '#370617',
-                }}
-              >
-                {vibe.tags.join(' • ')}
-              </p>
+              {vibe.tags.length > 0 && (
+                <p
+                  style={{
+                    fontFamily: 'Poppins, sans-serif',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    color: '#370617',
+                  }}
+                >
+                  {vibe.tags.join(' • ')}
+                </p>
+              )}
             </div>
             <Music className="w-6 h-6" style={{ color: '#03071E' }} />
           </motion.div>
@@ -189,17 +233,33 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
         {/* Track Queue */}
         {!isLoading && !error && tracks.length > 0 && (
           <div className="px-6 pb-6">
-            <h2
-              className="mb-3"
-              style={{
-                fontFamily: 'Poppins, sans-serif',
-                fontSize: '18px',
-                fontWeight: 700,
-                color: '#EAE2B7',
-              }}
-            >
-              Your Queue
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2
+                style={{
+                  fontFamily: 'Poppins, sans-serif',
+                  fontSize: '18px',
+                  fontWeight: 700,
+                  color: '#EAE2B7',
+                }}
+              >
+                Your Queue
+              </h2>
+              <button
+                onClick={handleNext}
+                disabled={nowPlayingIndex >= tracks.length - 1}
+                className="flex items-center gap-2 px-4 py-2 rounded-full transition-all disabled:opacity-50"
+                style={{
+                  fontFamily: 'Poppins, sans-serif',
+                  background: 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                }}
+              >
+                <SkipForward className="w-4 h-4" />
+                Next
+              </button>
+            </div>
             <div className="space-y-3">
               {tracks.map((track, index) => (
                 <motion.div
@@ -302,18 +362,17 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
                     </span>
                   )}
 
-                  {/* Play Button */}
+                  {/* Play / Open */}
                   <button
                     className="rounded-full p-2 flex-shrink-0 transition-all"
                     style={{
                       background: 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)',
                     }}
-                    onClick={() => {
-                      if (track.preview_url) {
-                        window.open(track.preview_url, '_blank');
-                      } else if (track.external_urls) {
-                        window.open(track.external_urls, '_blank');
-                      }
+                    onClick={async () => {
+                      const ok = await startPlayback([toUri(track)]);
+                      if (ok.success) return;
+                      if (track.preview_url) window.open(track.preview_url, '_blank');
+                      else if (track.external_urls) window.open(track.external_urls, '_blank');
                     }}
                   >
                     <Play className="w-4 h-4 text-white fill-white" />
