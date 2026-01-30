@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { motion } from 'motion/react';
-import { Play, Pause, Music, ExternalLink } from 'lucide-react';
+import { Play, Pause, Music, ExternalLink, SkipForward } from 'lucide-react';
 import { Track } from '../services/heartbeatsApi';
+import { useCrossfade } from '../hooks/useCrossfade';
 
 interface SongQueueProps {
   tracks: Track[];
@@ -11,46 +12,95 @@ interface SongQueueProps {
 }
 
 export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
-  const [playingTrackId, setPlayingTrackId] = React.useState<string | null>(null);
-  const [audio, setAudio] = React.useState<HTMLAudioElement | null>(null);
+  const [currentTrackIndex, setCurrentTrackIndex] = React.useState<number>(-1);
 
+  // Get the current track based on index
+  const currentTrack = currentTrackIndex >= 0 ? tracks[currentTrackIndex] : null;
+  const playingTrackId = currentTrack?.track_id || null;
+
+  // Handle track end - crossfade to next track
+  const handleTrackEnd = useCallback(() => {
+    setCurrentTrackIndex((prevIndex) => {
+      const nextIndex = prevIndex + 1;
+      if (nextIndex < tracks.length && tracks[nextIndex]?.preview_url) {
+        // Will trigger crossfade via useEffect below
+        return nextIndex;
+      }
+      // No more tracks with preview URLs
+      return -1;
+    });
+  }, [tracks]);
+
+  // Initialize crossfade hook
+  const {
+    play,
+    pause,
+    resume,
+    skipTo,
+    crossfadeTo,
+    isPlaying,
+    isCrossfading,
+    currentTime,
+    duration,
+    cleanup,
+  } = useCrossfade({
+    crossfadeDuration: 5000, // 5 second crossfade
+    onTrackEnd: handleTrackEnd,
+  });
+
+  // Cleanup on unmount
   React.useEffect(() => {
     return () => {
-      // Cleanup audio on unmount
-      if (audio) {
-        audio.pause();
-        audio.src = '';
-      }
+      cleanup();
     };
-  }, [audio]);
+  }, [cleanup]);
 
-  const handlePlayPause = (track: Track) => {
+  // Handle crossfade when track index changes due to auto-advance
+  const prevIndexRef = React.useRef<number>(-1);
+  React.useEffect(() => {
+    const prevIndex = prevIndexRef.current;
+    prevIndexRef.current = currentTrackIndex;
+
+    // Only crossfade if this was an auto-advance (track ended)
+    if (
+      currentTrackIndex >= 0 &&
+      prevIndex >= 0 &&
+      currentTrackIndex === prevIndex + 1 &&
+      tracks[currentTrackIndex]?.preview_url
+    ) {
+      crossfadeTo(tracks[currentTrackIndex].preview_url!);
+    }
+  }, [currentTrackIndex, tracks, crossfadeTo]);
+
+  const handlePlayPause = (track: Track, index: number) => {
     if (playingTrackId === track.track_id) {
-      // Pause current track
-      if (audio) {
-        audio.pause();
-        setAudio(null);
+      // Pause/resume current track
+      if (isPlaying) {
+        pause();
+      } else {
+        resume();
       }
-      setPlayingTrackId(null);
     } else {
-      // Play new track
-      if (audio) {
-        audio.pause();
-      }
-
+      // Play different track - instant skip (no crossfade)
       if (track.preview_url) {
-        const newAudio = new Audio(track.preview_url);
-        newAudio.play().catch((err) => {
+        skipTo(track.preview_url).then(() => {
+          setCurrentTrackIndex(index);
+        }).catch((err) => {
           console.error('Error playing preview:', err);
         });
-        setAudio(newAudio);
-        setPlayingTrackId(track.track_id);
-
-        newAudio.onended = () => {
-          setPlayingTrackId(null);
-          setAudio(null);
-        };
       }
+    }
+  };
+
+  const handleSkipNext = () => {
+    const nextIndex = currentTrackIndex + 1;
+    if (nextIndex < tracks.length && tracks[nextIndex]?.preview_url) {
+      // Manual skip - instant switch, no crossfade
+      skipTo(tracks[nextIndex].preview_url!).then(() => {
+        setCurrentTrackIndex(nextIndex);
+      }).catch((err) => {
+        console.error('Error skipping to next:', err);
+      });
     }
   };
 
@@ -99,7 +149,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
           >
             Your Queue
           </h1>
-          <p 
+          <p
             style={{
               fontFamily: 'Poppins, sans-serif',
               fontSize: '14px',
@@ -109,6 +159,59 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
           >
             Cluster {clusterId} • {bpm} BPM • {tracks.length} songs
           </p>
+
+          {/* Now Playing & Skip Controls */}
+          {currentTrack && (
+            <div
+              className="mt-4 p-3 rounded-xl flex items-center justify-between"
+              style={{
+                backgroundColor: 'rgba(252, 191, 73, 0.15)',
+                border: '1px solid rgba(252, 191, 73, 0.3)',
+              }}
+            >
+              <div className="flex-1 min-w-0">
+                <p style={{ fontSize: '12px', color: '#FCBF49', opacity: 0.8 }}>
+                  {isCrossfading ? 'Crossfading to...' : 'Now Playing'}
+                </p>
+                <p
+                  className="truncate"
+                  style={{ fontSize: '14px', color: '#EAE2B7', fontWeight: 600 }}
+                >
+                  {currentTrack.name}
+                </p>
+                {/* Progress bar */}
+                {duration > 0 && (
+                  <div
+                    className="mt-2 h-1 rounded-full overflow-hidden"
+                    style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}
+                  >
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{
+                        width: `${(currentTime / duration) * 100}%`,
+                        backgroundColor: '#FCBF49'
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Skip Next Button */}
+              <motion.button
+                onClick={handleSkipNext}
+                disabled={currentTrackIndex >= tracks.length - 1}
+                className="ml-4 p-3 rounded-full disabled:opacity-40"
+                style={{
+                  backgroundColor: 'rgba(252, 191, 73, 0.3)',
+                  color: '#FCBF49'
+                }}
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+              >
+                <SkipForward className="w-5 h-5" />
+              </motion.button>
+            </div>
+          )}
         </div>
 
         {/* Song List */}
@@ -127,8 +230,12 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                 transition={{ delay: index * 0.05 }}
                 className="rounded-xl p-4 flex items-center gap-4"
                 style={{
-                  backgroundColor: 'rgba(0, 48, 73, 0.6)',
-                  border: '1px solid rgba(252, 191, 73, 0.2)',
+                  backgroundColor: index === currentTrackIndex
+                    ? 'rgba(252, 191, 73, 0.2)'
+                    : 'rgba(0, 48, 73, 0.6)',
+                  border: index === currentTrackIndex
+                    ? '1px solid rgba(252, 191, 73, 0.5)'
+                    : '1px solid rgba(252, 191, 73, 0.2)',
                   backdropFilter: 'blur(10px)'
                 }}
               >
@@ -182,7 +289,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                 <div className="flex items-center gap-2">
                   {track.preview_url && (
                     <motion.button
-                      onClick={() => handlePlayPause(track)}
+                      onClick={() => handlePlayPause(track, index)}
                       className="p-3 rounded-full"
                       style={{
                         backgroundColor: playingTrackId === track.track_id ? '#FCBF49' : 'rgba(252, 191, 73, 0.2)',
@@ -191,7 +298,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
                     >
-                      {playingTrackId === track.track_id ? (
+                      {playingTrackId === track.track_id && isPlaying ? (
                         <Pause className="w-5 h-5" />
                       ) : (
                         <Play className="w-5 h-5" />
