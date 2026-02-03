@@ -39,3 +39,12 @@ annas_archive_data/
 *.log
 __pycache__/
 *.pyc
+
+# Generated datasets and model artifacts
+enriched_kaggle.csv
+merged_with_archive.csv
+recs/model/
+*.joblib
+*.db
+*.npy
+

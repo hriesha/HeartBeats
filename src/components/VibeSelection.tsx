@@ -1,48 +1,82 @@
 import { motion } from 'motion/react';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, ChevronDown, ChevronUp, Beaker } from 'lucide-react';
 import { VibeType } from '../App';
 import { useState, useEffect } from 'react';
-import { runClustering, Cluster } from '../utils/api';
+import { runClustering, Cluster, getRecsCoverage, runClusteringWithRecs, getTracksFromTrack } from '../utils/api';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 
 interface VibeSelectionProps {
-  bpm: number;
+  paceValue: number;
+  paceUnit: 'min/mile' | 'min/km';
+  bpm?: number; // For backward compatibility with workouts
   onVibeSelect: (vibe: VibeType) => void;
   onBack: () => void;
 }
 
-export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps) {
+export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }: VibeSelectionProps) {
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [recsOpen, setRecsOpen] = useState(false);
+  const [recsLoading, setRecsLoading] = useState(false);
+  const [recsResult, setRecsResult] = useState<{
+    coverage?: { total_saved: number; in_lookup: number; coverage_pct: number; by_cluster: Record<string, number> };
+    clusters?: { name: string; count: number }[];
+    fromTrack?: { source: string; tracks: { name?: string; artist_names?: string }[] };
+    error?: string;
+  } | null>(null);
 
   useEffect(() => {
-    // Fetch clusters when component mounts or BPM changes
+    // Fetch clusters using recs model with pace
     const fetchClusters = async () => {
       setIsLoading(true);
       setError(null);
 
       try {
-        // Pass null for n_clusters to enable auto-determination
-        // This ensures dynamic k selection based on library
-        const result = await runClustering(bpm, null);
+        // Use recs model with pace (converts pace to BPM automatically)
+        const result = await runClustering(paceValue, paceUnit, null);
         if (result && result.clusters) {
           setClusters(result.clusters);
-          console.log(`Clusters loaded for BPM ${bpm}:`, result.clusters);
+          console.log(`Clusters loaded for pace ${paceValue} ${paceUnit}:`, result.clusters);
+
+          // Also fetch coverage info to show user
+          try {
+            const coverage = await getRecsCoverage();
+            if (coverage?.success) {
+              setRecsResult({
+                coverage: {
+                  total_saved: coverage.total_saved ?? 0,
+                  in_lookup: coverage.in_lookup ?? 0,
+                  coverage_pct: coverage.coverage_pct ?? 0,
+                  by_cluster: coverage.by_cluster ?? {},
+                },
+              });
+            }
+          } catch (e) {
+            console.warn('Could not fetch coverage:', e);
+          }
         } else {
           setError('Failed to load clusters. Please make sure you have saved tracks in your Spotify library.');
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error fetching clusters:', err);
-        setError('Failed to connect to the server. Please make sure the API server is running.');
+        const errorMessage = err?.message || String(err);
+        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError') || errorMessage.includes('connection')) {
+          setError('Connection failed: API server is not running. Please start it with: python3 api/heartbeats_api.py');
+        } else if (errorMessage.includes('Spotify not connected')) {
+          setError('Spotify not connected. Please connect Spotify first.');
+        } else {
+          setError(`Failed to load clusters: ${errorMessage}`);
+        }
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchClusters();
-  }, [bpm]); // Re-fetch when BPM changes
+  }, [paceValue, paceUnit]); // Re-fetch when pace changes
 
   const handleVibeClick = (cluster: Cluster) => {
     // Convert Cluster to VibeType
@@ -59,6 +93,39 @@ export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps)
     setTimeout(() => {
       onVibeSelect(vibe);
     }, 800);
+  };
+
+  const runRecsTest = async () => {
+    setRecsLoading(true);
+    setRecsResult(null);
+    try {
+      const coverage = await getRecsCoverage();
+      if (!coverage?.success) {
+        setRecsResult({ error: coverage?.error ?? 'Recs coverage failed. Connect Spotify first.' });
+        return;
+      }
+      const clustersRes = await runClusteringWithRecs(bpm);
+      const sampleId = coverage.sample_in_lookup?.[0];
+      let fromTrackRes: { source?: string; tracks?: { name?: string; artist_names?: string }[] } = {};
+      if (sampleId) {
+        const ft = await getTracksFromTrack(sampleId, undefined, 5);
+        if (ft) fromTrackRes = { source: 'recs', tracks: ft.tracks };
+      }
+      setRecsResult({
+        coverage: {
+          total_saved: coverage.total_saved ?? 0,
+          in_lookup: coverage.in_lookup ?? 0,
+          coverage_pct: coverage.coverage_pct ?? 0,
+          by_cluster: coverage.by_cluster ?? {},
+        },
+        clusters: clustersRes?.clusters?.map(c => ({ name: c.name, count: c.track_count })) ?? [],
+        fromTrack: fromTrackRes.tracks?.length ? fromTrackRes : undefined,
+      });
+    } catch (e) {
+      setRecsResult({ error: String(e) });
+    } finally {
+      setRecsLoading(false);
+    }
   };
 
   if (isLoading) {
@@ -222,7 +289,7 @@ export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps)
               fontWeight: 500
             }}
           >
-            based on {bpm} bpm
+            {paceValue ? `pace: ${Math.floor(paceValue)}:${Math.round((paceValue % 1) * 60).toString().padStart(2, '0')} ${paceUnit}` : `based on ${bpm} bpm`}
           </p>
           <h1
             className="mb-2"
@@ -248,6 +315,22 @@ export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps)
           >
             we've clustered your tracks into {clusters.length} moods. pick how you want to feel.
           </p>
+          {recsResult?.coverage && (
+            <div
+              className="mt-3 p-2 rounded-lg text-xs"
+              style={{
+                fontFamily: 'Poppins, sans-serif',
+                backgroundColor: recsResult.coverage.coverage_pct >= 50 ? 'rgba(46, 204, 113, 0.2)' : 'rgba(241, 196, 15, 0.2)',
+                color: '#EAE2B7',
+                border: `1px solid ${recsResult.coverage.coverage_pct >= 50 ? 'rgba(46, 204, 113, 0.4)' : 'rgba(241, 196, 15, 0.4)'}`,
+              }}
+            >
+              📊 {recsResult.coverage.in_lookup} / {recsResult.coverage.total_saved} tracks in model ({recsResult.coverage.coverage_pct}% coverage)
+              {recsResult.coverage.coverage_pct < 50 && (
+                <span className="block mt-1 opacity-80">Some tracks may not have recommendations.</span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Vibe Bubbles - dynamically positioned */}
@@ -354,6 +437,68 @@ export function VibeSelection({ bpm, onVibeSelect, onBack }: VibeSelectionProps)
             tap a vibe bubble to dive in
           </p>
         </div>
+
+        {/* Test recs model (collapsible) */}
+        <Collapsible open={recsOpen} onOpenChange={setRecsOpen} className="mt-4">
+          <CollapsibleTrigger
+            className="flex items-center justify-center gap-2 w-full py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{
+              fontFamily: 'Poppins, sans-serif',
+              color: '#FCBF49',
+              backgroundColor: 'rgba(0, 48, 73, 0.6)',
+            }}
+          >
+            <Beaker className="w-4 h-4" />
+            Test recs model
+            {recsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div
+              className="mt-2 p-3 rounded-lg text-left space-y-2"
+              style={{
+                fontFamily: 'Poppins, sans-serif',
+                fontSize: '12px',
+                color: '#EAE2B7',
+                backgroundColor: 'rgba(0, 48, 73, 0.5)',
+              }}
+            >
+              <p className="opacity-80">See how well the trained model covers your Spotify library and gets recommendations.</p>
+              <button
+                type="button"
+                onClick={runRecsTest}
+                disabled={recsLoading}
+                className="px-3 py-1.5 rounded-md text-xs font-semibold disabled:opacity-50"
+                style={{ backgroundColor: '#F77F00', color: '#fff' }}
+              >
+                {recsLoading ? 'Running...' : 'Run full test'}
+              </button>
+              {recsResult?.error && (
+                <p className="text-red-300 text-xs">{recsResult.error}</p>
+              )}
+              {recsResult?.coverage && (
+                <div className="space-y-1 text-xs">
+                  <p>Coverage: {recsResult.coverage.in_lookup} / {recsResult.coverage.total_saved} saved tracks ({recsResult.coverage.coverage_pct}%) in recs lookup.</p>
+                  {Object.keys(recsResult.coverage.by_cluster).length > 0 && (
+                    <p>By cluster: {JSON.stringify(recsResult.coverage.by_cluster)}</p>
+                  )}
+                </div>
+              )}
+              {recsResult?.clusters && recsResult.clusters.length > 0 && (
+                <p className="text-xs">Recs clusters: {recsResult.clusters.map(c => `${c.name} (${c.count})`).join(', ')}</p>
+              )}
+              {recsResult?.fromTrack?.tracks && recsResult.fromTrack.tracks.length > 0 && (
+                <div className="text-xs">
+                  <p className="font-semibold mb-1">Sample recommendations (from one of your tracks):</p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    {recsResult.fromTrack.tracks.slice(0, 5).map((t, i) => (
+                      <li key={i}>{t.name ?? t.artist_names ?? '—'} {t.artist_names ? `– ${t.artist_names}` : ''}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </div>
   );

@@ -88,15 +88,25 @@ export async function connectSpotify(): Promise<{ success: boolean; user?: any; 
 }
 
 /**
- * Run clustering on user's tracks
- * @param bpm - Target BPM (clustering will be optimized for this BPM)
+ * Run clustering on user's tracks using recs model
+ * @param paceValue - Pace value (e.g., 10.0 for 10:00 min/mile)
+ * @param paceUnit - Pace unit ('min/mile' or 'min/km')
  * @param nClusters - Number of clusters (null/undefined for auto-determination)
  */
-export async function runClustering(bpm: number, nClusters: number | null = null): Promise<ClusteringResponse | null> {
+export async function runClustering(
+  paceValue: number,
+  paceUnit: 'min/mile' | 'min/km',
+  nClusters: number | null = null
+): Promise<ClusteringResponse | null> {
   try {
-    const body: any = { bpm };
+    // Use recs model by default - it converts pace to BPM automatically
+    const body: any = {
+      use_recs_model: true,
+      use_spotify_library: true,
+      pace_value: paceValue,
+      pace_unit: paceUnit,
+    };
     // Only include n_clusters if explicitly provided (not null)
-    // This allows backend to auto-determine optimal k
     if (nClusters !== null && nClusters !== undefined) {
       body.n_clusters = nClusters;
     }
@@ -110,13 +120,30 @@ export async function runClustering(bpm: number, nClusters: number | null = null
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Clustering failed');
+      let errorMessage = 'Clustering failed';
+      try {
+        const error = await response.json();
+        errorMessage = error.error || errorMessage;
+      } catch {
+        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      }
+      throw new Error(errorMessage);
     }
 
-    const raw = await response.json();
-    if (!raw?.success || !Array.isArray(raw?.clusters)) {
-      throw new Error(raw?.error || "Clustering failed");
+    let raw;
+    try {
+      raw = await response.json();
+    } catch (e) {
+      throw new Error(`Invalid JSON response from server. Make sure the API server is running.`);
+    }
+
+    if (!raw?.success) {
+      throw new Error(raw?.error || raw?.message || "Clustering failed");
+    }
+
+    // Empty clusters array is valid (no tracks match the filter)
+    if (!Array.isArray(raw?.clusters)) {
+      throw new Error(raw?.error || "Invalid response format: clusters is not an array");
     }
 
     const colors = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049", "#9B59B6", "#2ECC71", "#3498DB"];
@@ -270,6 +297,74 @@ export async function addToQueue(uri: string): Promise<{ success: boolean; error
     return { success: !!d?.success, error: d?.error };
   } catch (e) {
     return { success: false, error: String(e) };
+  }
+}
+
+/**
+ * Recs model coverage: how many of the user's saved tracks are in the recs lookup.
+ * Call after Spotify is connected. Returns total_saved, in_lookup, coverage_pct, by_cluster, samples.
+ */
+export async function getRecsCoverage(): Promise<{
+  success: boolean;
+  total_saved?: number;
+  in_lookup?: number;
+  not_in_lookup?: number;
+  coverage_pct?: number;
+  by_cluster?: Record<string, number>;
+  sample_in_lookup?: string[];
+  sample_not_in_lookup?: string[];
+  error?: string;
+} | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/recs/coverage`, { method: "GET" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Recs coverage failed");
+    return data;
+  } catch (e) {
+    console.error("getRecsCoverage error:", e);
+    return null;
+  }
+}
+
+/**
+ * Run clustering using the recs model (pre-trained clusters from track_id only).
+ * No Anna's Archive needed; uses user's Spotify library and recs lookup.
+ */
+export async function runClusteringWithRecs(bpm?: number): Promise<ClusteringResponse | null> {
+  try {
+    const body: { use_recs_model: boolean; use_spotify_library: boolean; bpm?: number } = {
+      use_recs_model: true,
+      use_spotify_library: true,
+    };
+    if (bpm != null) body.bpm = bpm;
+    const response = await fetch(`${API_BASE_URL}/clusters`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || "Recs clustering failed");
+    }
+    const raw = await response.json();
+    if (!raw?.success || !Array.isArray(raw?.clusters))
+      throw new Error(raw?.error || raw?.message || "Recs clustering failed");
+    const colors = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049", "#9B59B6", "#2ECC71", "#3498DB"];
+    const clusters: Cluster[] = raw.clusters.map((c: { cluster_id?: number; count?: number; name?: string; color?: string; tags?: string[] }, idx: number) => {
+      const id = Number(c.cluster_id ?? idx);
+      return {
+        id,
+        name: c.name ?? `Vibe ${id}`,
+        color: c.color ?? colors[id % colors.length],
+        tags: Array.isArray(c.tags) ? c.tags : [],
+        mean_tempo: 0,
+        track_count: Number(c.count ?? 0),
+      };
+    });
+    return { clusters, total_tracks: Number(raw.total_tracks ?? 0) };
+  } catch (e) {
+    console.error("runClusteringWithRecs error:", e);
+    return null;
   }
 }
 

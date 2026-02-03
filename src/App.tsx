@@ -3,7 +3,7 @@ import { PhoneFrame } from './components/PhoneFrame';
 import { LoginScreen } from './components/LoginScreen';
 import { SpotifyConnect } from './components/SpotifyConnect';
 import { ControlOptions } from './components/ControlOptions';
-import { BPMSelection } from './components/BPMSelection';
+import { PaceSelection } from './components/PaceSelection';
 import { WorkoutSelection } from './components/WorkoutSelection';
 import { VibeSelection } from './components/VibeSelection';
 import { VibeDetail } from './components/VibeDetail';
@@ -20,7 +20,9 @@ export type VibeType = {
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<'login' | 'spotify' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'detail' | 'trackerConnected'>('login');
-  const [selectedBPM, setSelectedBPM] = useState(120);
+  const [selectedBPM, setSelectedBPM] = useState(120); // Keep for backward compatibility with workouts
+  const [paceValue, setPaceValue] = useState(10.0);
+  const [paceUnit, setPaceUnit] = useState<'min/mile' | 'min/km'>('min/mile');
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
 
   const handleLogin = () => {
@@ -50,8 +52,9 @@ export default function App() {
     setCurrentScreen('vibe');
   };
 
-  const handleBPMSubmit = (bpm: number) => {
-    setSelectedBPM(bpm);
+  const handlePaceSubmit = (value: number, unit: 'min/mile' | 'min/km') => {
+    setPaceValue(value);
+    setPaceUnit(unit);
     setCurrentScreen('vibe');
   };
 
@@ -100,9 +103,9 @@ export default function App() {
         {currentScreen === 'login' && <LoginScreen onLogin={handleLogin} />}
         {currentScreen === 'spotify' && <SpotifyConnect onConnected={handleSpotifyConnected} onSkip={handleSpotifySkip} onBack={handleBack} />}
         {currentScreen === 'controlOptions' && <ControlOptions onSelectCustom={handleSelectCustomControls} onSelectWatch={handleSelectWatch} onBack={handleBack} />}
-        {currentScreen === 'bpm' && <BPMSelection onSubmit={handleBPMSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
+        {currentScreen === 'bpm' && <PaceSelection onSubmit={handlePaceSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}
-        {currentScreen === 'vibe' && <VibeSelection bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
+        {currentScreen === 'vibe' && <VibeSelection paceValue={paceValue} paceUnit={paceUnit} bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
         {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} />}
         {currentScreen === 'trackerConnected' && <TrackerConnected onComplete={handleTrackerConnected} />}
       </PhoneFrame>
