@@ -37,28 +37,35 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
       try {
         // Use recs model with pace (converts pace to BPM automatically)
         const result = await runClustering(paceValue, paceUnit, null);
+        console.log('Clustering result:', result);
+        
         if (result && result.clusters) {
-          setClusters(result.clusters);
-          console.log(`Clusters loaded for pace ${paceValue} ${paceUnit}:`, result.clusters);
+          if (result.clusters.length === 0) {
+            setError(`No tracks found for pace ${paceValue} ${paceUnit}. Try a different pace, or make sure you have tracks in your Spotify library that match this tempo.`);
+          } else {
+            setClusters(result.clusters);
+            console.log(`Clusters loaded for pace ${paceValue} ${paceUnit}:`, result.clusters);
 
-          // Also fetch coverage info to show user
-          try {
-            const coverage = await getRecsCoverage();
-            if (coverage?.success) {
-              setRecsResult({
-                coverage: {
-                  total_saved: coverage.total_saved ?? 0,
-                  in_lookup: coverage.in_lookup ?? 0,
-                  coverage_pct: coverage.coverage_pct ?? 0,
-                  by_cluster: coverage.by_cluster ?? {},
-                },
-              });
+            // Also fetch coverage info to show user
+            try {
+              const coverage = await getRecsCoverage();
+              if (coverage?.success) {
+                setRecsResult({
+                  coverage: {
+                    total_saved: coverage.total_saved ?? 0,
+                    in_lookup: coverage.in_lookup ?? 0,
+                    coverage_pct: coverage.coverage_pct ?? 0,
+                    by_cluster: coverage.by_cluster ?? {},
+                  },
+                });
+              }
+            } catch (e) {
+              console.warn('Could not fetch coverage:', e);
             }
-          } catch (e) {
-            console.warn('Could not fetch coverage:', e);
           }
         } else {
-          setError('Failed to load clusters. Please make sure you have saved tracks in your Spotify library.');
+          const errorMsg = result?.message || 'Failed to load clusters. Please make sure you have saved tracks in your Spotify library.';
+          setError(errorMsg);
         }
       } catch (err: any) {
         console.error('Error fetching clusters:', err);

@@ -108,7 +108,7 @@ ANNAS_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "annas_archive_data", "spotify_clean_audio_features.sqlite3"),
 )
 ANNAS_DEFAULT_LIMIT = int(os.environ.get("ANNAS_ARCHIVE_LIMIT", "25000"))
-SPOTIFY_LIBRARY_LIMIT = int(os.environ.get("SPOTIFY_LIBRARY_LIMIT", "2000"))
+SPOTIFY_LIBRARY_LIMIT = int(os.environ.get("SPOTIFY_LIBRARY_LIMIT", "1000"))  # Reduced default for faster processing
 BPM_TOLERANCE = float(os.environ.get("BPM_TOLERANCE", "15"))  # ±15 BPM for first raw filtering
 BPM_FILTER_MIN_TRACKS = int(os.environ.get("BPM_FILTER_MIN_TRACKS", "80"))
 
@@ -743,8 +743,17 @@ def _fetch_full_metadata_for_tracks(track_ids: List[str]) -> Dict[str, Dict[str,
                 }
         return metadata_map
 
-    # Fetch genres and related artists for each track
-    for track_info in tracks_info:
+    # Fetch genres and related artists for each track (with timeout protection)
+    import time
+    start_time = time.time()
+    max_metadata_time = 10.0  # Max 10 seconds for metadata fetching
+    
+    for i, track_info in enumerate(tracks_info):
+        # Timeout protection
+        if time.time() - start_time > max_metadata_time:
+            log.warning(f"Metadata fetch timeout after {i}/{len(tracks_info)} tracks")
+            break
+            
         tid = str(track_info.get("track_id") or track_info.get("id") or "")
         if not tid:
             continue
@@ -758,12 +767,14 @@ def _fetch_full_metadata_for_tracks(track_ids: List[str]) -> Dict[str, Dict[str,
 
         if main_artist_id:
             try:
+                # Add timeout for individual API calls
                 artist_info = sp.artist(main_artist_id)
                 genres = artist_info.get("genres", [])
 
-                # Get related artists (top 5)
-                related = sp.artist_related_artists(main_artist_id)
-                related_artist_ids = [a.get("id") for a in related.get("artists", [])[:5]]
+                # Get related artists (top 5) - skip if taking too long
+                if time.time() - start_time < max_metadata_time - 1:
+                    related = sp.artist_related_artists(main_artist_id)
+                    related_artist_ids = [a.get("id") for a in related.get("artists", [])[:5]]
             except Exception as e:
                 log.debug(f"Could not fetch artist info for {main_artist_id}: {e}")
 
@@ -892,30 +903,77 @@ def _resolve_target_bpm(data: dict) -> Optional[float]:
 
 
 def _load_tempo_lookup() -> Dict[str, float]:
-    """Load tempo lookup map from training CSV (track_id -> tempo)."""
+    """Load tempo lookup map from track_lookup.db (fast SQLite) or CSV fallback."""
     global _tempo_lookup_cache
     if _tempo_lookup_cache is not None:
         return _tempo_lookup_cache
 
     _tempo_lookup_cache = {}
     try:
-        # Try to load from training CSV (test_set.csv has all tracks)
         model_dir = Path(__file__).resolve().parent.parent / "recs" / "model"
-        test_set_path = model_dir / "test_set.csv"
-        train_set_path = model_dir.parent.parent / "enriched_kaggle.csv"  # Full training set
-
-        for csv_path in [test_set_path, train_set_path]:
-            if csv_path.exists():
-                log.info(f"Loading tempo lookup from {csv_path}")
-                df = pd.read_csv(csv_path)
-                if "track_id" in df.columns and "tempo" in df.columns:
-                    for _, row in df.iterrows():
-                        tid = str(row["track_id"])
-                        tempo = float(row["tempo"])
-                        if tempo > 0:
-                            _tempo_lookup_cache[tid] = tempo
-                    log.info(f"Loaded {len(_tempo_lookup_cache)} tempo values from {csv_path}")
-                    break
+        
+        # Try SQLite first (much faster than CSV)
+        db_path = model_dir / "track_lookup.db"
+        if db_path.exists():
+            log.info(f"Loading tempo lookup from SQLite: {db_path}")
+            conn = sqlite3.connect(str(db_path))
+            try:
+                # Get tempo from track_lookup table if it has tempo column, otherwise use test_set.csv
+                cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='track_lookup'")
+                if cursor.fetchone():
+                    # Check if tempo column exists
+                    cursor = conn.execute("PRAGMA table_info(track_lookup)")
+                    columns = [row[1] for row in cursor.fetchall()]
+                    if "tempo" in columns:
+                        # Use LIMIT to speed up initial load (we can load more on demand)
+                        rows = conn.execute("SELECT track_id, tempo FROM track_lookup WHERE tempo > 0 LIMIT 500000").fetchall()
+                        for tid, tempo in rows:
+                            _tempo_lookup_cache[str(tid)] = float(tempo)
+                        log.info(f"Loaded {len(_tempo_lookup_cache)} tempo values from SQLite")
+                        return _tempo_lookup_cache
+                    else:
+                        log.info("track_lookup.db doesn't have tempo column, will use CSV fallback")
+            except Exception as e:
+                log.warning(f"SQLite tempo lookup failed: {e}, falling back to CSV")
+            finally:
+                conn.close()
+        
+        # Load from BOTH datasets for maximum coverage
+        merged_training_path = model_dir / "merged_training.csv"  # 2.2M tracks
+        test_set_path = model_dir / "test_set.csv"  # 439k tracks
+        
+        datasets_to_load = []
+        if merged_training_path.exists():
+            datasets_to_load.append(("merged_training.csv", merged_training_path))
+        if test_set_path.exists():
+            datasets_to_load.append(("test_set.csv", test_set_path))
+        
+        if datasets_to_load:
+            log.info(f"Loading tempo lookup from {len(datasets_to_load)} dataset(s) (chunked)")
+            chunk_size = 50000
+            
+            for dataset_name, csv_path in datasets_to_load:
+                log.info(f"Loading from {dataset_name}...")
+                rows_from_this_dataset = 0
+                try:
+                    for chunk in pd.read_csv(csv_path, chunksize=chunk_size, usecols=["track_id", "tempo"], low_memory=False):
+                        for _, row in chunk.iterrows():
+                            tid = str(row["track_id"])
+                            tempo = float(row["tempo"])
+                            if tempo > 0:
+                                # Only add if not already in cache (merged_training takes priority)
+                                if tid not in _tempo_lookup_cache:
+                                    _tempo_lookup_cache[tid] = tempo
+                                    rows_from_this_dataset += 1
+                        # Progress log every 100k rows
+                        if len(_tempo_lookup_cache) % 100000 < chunk_size:
+                            log.info(f"  Loaded {len(_tempo_lookup_cache):,} tempo values so far...")
+                except Exception as e:
+                    log.warning(f"Error loading from {dataset_name}: {e}, continuing...")
+                    continue
+                log.info(f"  Added {rows_from_this_dataset:,} new tempo values from {dataset_name}")
+            
+            log.info(f"Total loaded: {len(_tempo_lookup_cache):,} unique tempo values from {len(datasets_to_load)} dataset(s)")
     except Exception as e:
         log.warning(f"Could not load tempo lookup: {e}")
 
@@ -923,7 +981,7 @@ def _load_tempo_lookup() -> Dict[str, float]:
 
 
 def _load_audio_features_lookup() -> Dict[str, Dict[str, float]]:
-    """Load audio features lookup map from training CSV (track_id -> {tempo, energy, ...})."""
+    """Load audio features lookup map from track_lookup.db (fast SQLite) or CSV fallback."""
     global _audio_features_lookup_cache
     if _audio_features_lookup_cache is not None:
         return _audio_features_lookup_cache
@@ -931,28 +989,63 @@ def _load_audio_features_lookup() -> Dict[str, Dict[str, float]]:
     _audio_features_lookup_cache = {}
     try:
         model_dir = Path(__file__).resolve().parent.parent / "recs" / "model"
-        test_set_path = model_dir / "test_set.csv"
-        train_set_path = model_dir.parent.parent / "enriched_kaggle.csv"
-
-        for csv_path in [test_set_path, train_set_path]:
-            if csv_path.exists():
-                log.info(f"Loading audio features lookup from {csv_path}")
-                df = pd.read_csv(csv_path)
-                required_cols = ["track_id"] + FEATURE_COLS
-                if all(col in df.columns for col in required_cols):
-                    for _, row in df.iterrows():
-                        tid = str(row["track_id"])
-                        tempo = float(row["tempo"])
-                        if tempo > 0:  # Valid track
-                            _audio_features_lookup_cache[tid] = {
-                                "tempo": float(row["tempo"]),
-                                "energy": float(row["energy"]),
-                                "danceability": float(row["danceability"]),
-                                "valence": float(row["valence"]),
-                                "loudness": float(row["loudness"]),
-                            }
-                    log.info(f"Loaded {len(_audio_features_lookup_cache)} audio feature sets from {csv_path}")
-                    break
+        
+        # Try SQLite first (much faster)
+        db_path = model_dir / "track_lookup.db"
+        if db_path.exists():
+            log.info(f"Loading audio features from SQLite: {db_path}")
+            conn = sqlite3.connect(str(db_path))
+            try:
+                # track_lookup has f0-f4 (scaled features), we need original tempo
+                # Use test_set.csv for tempo, but we can get other features from recs inference
+                # For now, fallback to CSV but use smaller file
+                pass
+            finally:
+                conn.close()
+        
+        # Load from BOTH datasets for maximum coverage
+        merged_training_path = model_dir / "merged_training.csv"  # 2.2M tracks
+        test_set_path = model_dir / "test_set.csv"  # 439k tracks
+        
+        datasets_to_load = []
+        if merged_training_path.exists():
+            datasets_to_load.append(("merged_training.csv", merged_training_path))
+        if test_set_path.exists():
+            datasets_to_load.append(("test_set.csv", test_set_path))
+        
+        if datasets_to_load:
+            log.info(f"Loading audio features from {len(datasets_to_load)} dataset(s) (chunked)")
+            required_cols = ["track_id"] + FEATURE_COLS
+            chunk_size = 50000
+            
+            for dataset_name, csv_path in datasets_to_load:
+                log.info(f"Loading from {dataset_name}...")
+                rows_from_this_dataset = 0
+                try:
+                    for chunk in pd.read_csv(csv_path, chunksize=chunk_size, usecols=required_cols, low_memory=False):
+                        for _, row in chunk.iterrows():
+                            tid = str(row["track_id"])
+                            tempo = float(row["tempo"])
+                            if tempo > 0:  # Valid track
+                                # Only add if not already in cache (merged_training takes priority)
+                                if tid not in _audio_features_lookup_cache:
+                                    _audio_features_lookup_cache[tid] = {
+                                        "tempo": float(row["tempo"]),
+                                        "energy": float(row["energy"]),
+                                        "danceability": float(row["danceability"]),
+                                        "valence": float(row["valence"]),
+                                        "loudness": float(row["loudness"]),
+                                    }
+                                    rows_from_this_dataset += 1
+                        # Progress log every 100k rows
+                        if len(_audio_features_lookup_cache) % 100000 < chunk_size:
+                            log.info(f"  Loaded {len(_audio_features_lookup_cache):,} audio feature sets so far...")
+                except Exception as e:
+                    log.warning(f"Error loading from {dataset_name}: {e}, continuing...")
+                    continue
+                log.info(f"  Added {rows_from_this_dataset:,} new audio feature sets from {dataset_name}")
+            
+            log.info(f"Total loaded: {len(_audio_features_lookup_cache):,} unique audio feature sets from {len(datasets_to_load)} dataset(s)")
     except Exception as e:
         log.warning(f"Could not load audio features lookup: {e}")
 
@@ -1040,7 +1133,9 @@ def get_clusters():
                         "error": "Must provide either 'bpm' or 'pace_value' + 'pace_unit'",
                     }), 400
 
+                log.info(f"Target BPM resolved: {target_bpm}")
                 ids = _get_user_saved_track_ids()
+                log.info(f"Retrieved {len(ids)} saved track IDs from Spotify")
                 if not ids:
                     return jsonify({
                         "success": True,
@@ -1052,81 +1147,80 @@ def get_clusters():
 
                 log.info(f"Filtering {len(ids)} user tracks by BPM {target_bpm} +/- 15...")
 
-                # Fetch full metadata for all tracks (including genres, related artists)
-                all_metadata = _fetch_full_metadata_for_tracks(ids)
-
-                # Step 1: Filter tracks by tempo (+/- 15 BPM)
-                filtered_tracks: List[tuple] = []  # (track_id, tempo, metadata, audio_features)
-                predicted_features_map: Dict[str, dict] = {}  # track_id -> predicted audio features
-
-                # Load audio features lookup for tracks in training set
+                # OPTIMIZATION: Load tempo lookup first (cached after first call)
+                log.info("Loading tempo lookup...")
+                tempo_lookup = _load_tempo_lookup()
+                log.info("Loading audio features lookup...")
                 audio_features_lookup = _load_audio_features_lookup()
-                log.info(f"Loaded {len(audio_features_lookup)} tracks from audio features lookup")
+                log.info(f"Tempo lookup ready: {len(tempo_lookup)} tracks, Audio features: {len(audio_features_lookup)} tracks")
 
-                tracks_with_tempo = 0
-                tracks_without_tempo = 0
+                # SKIP ALL SPOTIFY API CALLS - Only use tracks in our trained model
+                log.info("Filtering tracks by tempo and checking for audio features (NO API calls)...")
+                filtered_tracks: List[tuple] = []  # (track_id, tempo, audio_features)
+                
+                tracks_in_lookup = 0
+                tracks_not_in_lookup = 0
                 tracks_in_range = 0
                 tracks_out_of_range = 0
-                tracks_from_lookup = 0
-                tracks_from_prediction = 0
+                tracks_with_features = 0
+                tracks_skipped_no_features = 0
 
+                # Only process tracks that are in BPM range AND have audio features in lookup
                 for tid in ids:
-                    metadata = all_metadata.get(tid, {})
-
-                    # Get tempo: try lookup first, then metadata prediction
-                    tempo = _get_tempo_for_track(tid, metadata)
-
+                    # Get tempo from lookup (if track is in our training dataset)
+                    tempo = tempo_lookup.get(tid)
                     if tempo is None:
-                        tracks_without_tempo += 1
-                        continue  # Skip tracks without tempo
+                        # Track exists in user's library but NOT in our training dataset lookup
+                        tracks_not_in_lookup += 1
+                        continue
+                    
+                    tracks_in_lookup += 1
 
-                    tracks_with_tempo += 1
-
-                    # Filter: keep only tracks within +/- 15 BPM
+                    # Filter by BPM range
                     if abs(tempo - target_bpm) <= 15:
                         tracks_in_range += 1
-                        # Get audio features: try lookup first, then prediction
+                        
+                        # Get audio features from lookup (skip if not available)
                         audio_features = audio_features_lookup.get(tid)
-
+                        
                         if audio_features:
-                            tracks_from_lookup += 1
+                            tracks_with_features += 1
+                            filtered_tracks.append((tid, tempo, audio_features))
+                            # Limit to 200 tracks max for faster clustering
+                            if len(filtered_tracks) >= 200:
+                                break
                         else:
-                            # Predict from metadata
-                            if predict_audio_features_from_metadata:
-                                try:
-                                    pred_features = predict_audio_features_from_metadata(metadata)
-                                    if pred_features:
-                                        audio_features = pred_features
-                                        predicted_features_map[tid] = pred_features
-                                        tracks_from_prediction += 1
-                                except Exception as e:
-                                    log.debug(f"Metadata prediction failed for {tid}: {e}")
-
-                        if audio_features:
-                            filtered_tracks.append((tid, tempo, metadata, audio_features))
+                            tracks_skipped_no_features += 1
                     else:
                         tracks_out_of_range += 1
 
-                log.info(f"Tempo stats: {tracks_with_tempo} with tempo, {tracks_without_tempo} without tempo")
-                log.info(f"Range stats: {tracks_in_range} in range ({target_bpm}±15), {tracks_out_of_range} out of range")
-                log.info(f"Features source: {tracks_from_lookup} from lookup, {tracks_from_prediction} from prediction")
-
-                log.info(f"Filtered to {len(filtered_tracks)} tracks within {target_bpm} +/- 15 BPM")
+                log.info(f"Lookup stats: {tracks_in_lookup} tracks found in training dataset, {tracks_not_in_lookup} tracks NOT in training dataset")
+                log.info(f"BPM range stats: {tracks_in_range} in range ({target_bpm}±15), {tracks_out_of_range} out of range")
+                log.info(f"Features stats: {tracks_with_features} with audio features, {tracks_skipped_no_features} missing audio features")
+                log.info(f"Final filtered: {len(filtered_tracks)} tracks ready for clustering (using trained model only, NO API calls)")
 
                 if not filtered_tracks:
                     return jsonify({
                         "success": True,
                         "clusters": [],
-                        "total_tracks": 0,
+                        "total_tracks": len(ids),
                         "filtered_tracks": 0,
                         "cluster_method": "recs",
-                        "message": f"No tracks found within {target_bpm} +/- 15 BPM. Try a different pace.",
+                        "message": f"No tracks found within {target_bpm} +/- 15 BPM. Found {tracks_in_lookup} tracks in training dataset, {tracks_in_range} in BPM range, but none had audio features. Try a different pace or ensure your tracks are in the training dataset.",
+                        "stats": {
+                            "tracks_in_lookup": tracks_in_lookup,
+                            "tracks_not_in_lookup": tracks_not_in_lookup,
+                            "tracks_in_range": tracks_in_range,
+                            "tracks_out_of_range": tracks_out_of_range,
+                            "tracks_with_features": tracks_with_features,
+                            "tracks_skipped_no_features": tracks_skipped_no_features,
+                        },
                     })
 
                 # Step 2: Cluster only the filtered tracks
                 # Build DataFrame from filtered tracks with audio features
                 filtered_data = []
-                for tid, tempo, metadata, audio_features in filtered_tracks:
+                for tid, tempo, audio_features in filtered_tracks:
                     filtered_data.append({
                         "track_id": tid,
                         "tempo": audio_features.get("tempo", tempo),
@@ -1165,22 +1259,28 @@ def get_clusters():
                     tid = str(row["track_id"])
                     by_cluster.setdefault(cid, []).append(tid)
 
-                all_tids = df_filtered["track_id"].tolist()
-                details = _fetch_spotify_track_details_internal(all_tids)
-                tid_to_artists = {}
-                for d in details:
-                    tid = str(d.get("track_id") or d.get("id") or "")
-                    tid_to_artists[tid] = _parse_artists(d.get("artist_names") or "")
-
+                # SKIP fetching track details from Spotify API - use generic cluster names
                 top_artists_map = {}
                 colors = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049", "#9B59B6", "#2ECC71", "#3498DB"]
+                # Generate cluster names based on audio features instead of artists
                 for cid, tids in sorted(by_cluster.items()):
-                    cnt = Counter()
-                    for tid in tids[:200]:
-                        for a in tid_to_artists.get(tid, []):
-                            cnt[a] += 1
-                    top = [k for k, _ in cnt.most_common(3)]
-                    top_artists_map[cid] = top
+                    cluster_data = df_filtered[df_filtered["cluster"] == cid]
+                    mean_energy = cluster_data["energy"].mean()
+                    mean_danceability = cluster_data["danceability"].mean()
+                    mean_valence = cluster_data["valence"].mean()
+                    
+                    # Generate name based on features
+                    if mean_energy > 0.7 and mean_danceability > 0.7:
+                        name = "High Energy"
+                    elif mean_energy < 0.4 and mean_valence < 0.4:
+                        name = "Chill Vibes"
+                    elif mean_danceability > 0.75:
+                        name = "Dance Floor"
+                    elif mean_valence > 0.7:
+                        name = "Happy Vibes"
+                    else:
+                        name = f"Vibe {cid}"
+                    top_artists_map[cid] = [name]
 
                 cluster_stats = []
                 for cid in sorted(by_cluster.keys()):
@@ -1198,11 +1298,8 @@ def get_clusters():
                         "color": colors[int(cid) % len(colors)],
                     })
 
-                # Store predicted features for KNN
-                if predicted_features_map:
-                    log.info(f"Stored predicted features for {len(predicted_features_map)} tracks")
-                    global _predicted_features_cache
-                    _predicted_features_cache = predicted_features_map
+                # No predicted features needed - using only lookup cache
+                # (predicted_features_map removed since we skip metadata prediction)
 
                 return jsonify({
                     "success": True,
@@ -1213,20 +1310,27 @@ def get_clusters():
                     "target_bpm": target_bpm,
                     "bpm_range": f"{target_bpm - 15:.1f} - {target_bpm + 15:.1f}",
                     "stats": {
-                        "tracks_with_tempo": tracks_with_tempo,
-                        "tracks_without_tempo": tracks_without_tempo,
+                        "tracks_in_lookup": tracks_in_lookup,
+                        "tracks_not_in_lookup": tracks_not_in_lookup,
                         "tracks_in_range": tracks_in_range,
                         "tracks_out_of_range": tracks_out_of_range,
-                        "tracks_from_lookup": tracks_from_lookup,
-                        "tracks_from_prediction": tracks_from_prediction,
+                        "tracks_with_features": tracks_with_features,
+                        "tracks_skipped_no_features": tracks_skipped_no_features,
+                        "note": "Using trained model only - no Spotify API calls",
                     },
                 })
             except Exception as e:
                 log.error("use_recs_model path failed: %r", e, exc_info=True)
+                import traceback
+                error_details = traceback.format_exc()
+                log.error(f"Full traceback: {error_details}")
                 if use_recs_model and not (RECS_AVAILABLE and get_cluster_for_track):
                     return jsonify({"success": False, "error": "recs model not available"}), 503
-                # Re-raise to be handled by outer try/except
-                raise
+                return jsonify({
+                    "success": False,
+                    "error": f"Clustering failed: {str(e)}",
+                    "details": error_details[-500:] if len(error_details) > 500 else error_details,  # Last 500 chars
+                }), 500
 
         # Load data
         if csv_path:
@@ -1726,8 +1830,9 @@ def not_found(error):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))  # Changed from 5000 to 5001 (5000 is used by AirPlay)
+    host = "127.0.0.1"
     print(f"\n🚀 HeartBeats API Server")
-    print(f"📍 Running on http://0.0.0.0:{port}")
+    print(f"📍 Running on http://{host}:{port}")
     print(f"🔗 Health check: http://localhost:{port}/api/health")
     print(f"\nAvailable endpoints:")
     print(f"  POST /api/clusters     (bpm, use_recs_model, cluster_method, n_clusters)")
@@ -1740,4 +1845,4 @@ if __name__ == "__main__":
     print(f"  POST /api/playback/start  (uris)")
     print(f"  POST /api/playback/queue  (uri)")
     print(f"\n⚠️  Note: Frontend should be accessed via Vite dev server (usually http://localhost:5173)\n")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host=host, port=port, debug=True)

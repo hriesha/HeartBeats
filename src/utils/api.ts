@@ -143,7 +143,13 @@ export async function runClustering(
 
     // Empty clusters array is valid (no tracks match the filter)
     if (!Array.isArray(raw?.clusters)) {
-      throw new Error(raw?.error || "Invalid response format: clusters is not an array");
+      throw new Error(raw?.error || raw?.message || "Invalid response format: clusters is not an array");
+    }
+    
+    // If clusters is empty, include the message in the response
+    if (raw?.clusters.length === 0 && raw?.message) {
+      // Return clusters array but include message for frontend to display
+      return { clusters: [], total_tracks: raw?.total_tracks ?? 0, message: raw.message };
     }
 
     const colors = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049", "#9B59B6", "#2ECC71", "#3498DB"];
