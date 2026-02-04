@@ -63,6 +63,9 @@ def load_data(
     for col in FEATURE_COLS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # Replace inf/-inf with nan (avoids KMeans overflow)
+    df[FEATURE_COLS] = df[FEATURE_COLS].replace([float("inf"), float("-inf")], float("nan"))
+
     # CRITICAL: Drop tracks with missing or invalid tempo (tempo is required for BPM matching)
     before_tempo_drop = len(df)
     df = df.dropna(subset=["tempo"])
@@ -84,6 +87,11 @@ def load_data(
             df[col] = df[col].fillna(median_val)
             imputed_counts[col] = missing
             print(f"  Imputed {missing} missing values in '{col}' with median ({median_val:.3f})")
+
+    # Clip extreme outliers to avoid KMeans numerical overflow (use 0.5–99.5 percentiles)
+    for col in FEATURE_COLS:
+        lo, hi = df[col].quantile([0.005, 0.995])
+        df[col] = df[col].clip(lo, hi)
 
     if sample_size is not None and len(df) > sample_size:
         df = df.head(sample_size)
@@ -261,6 +269,18 @@ Examples:
     # Build track lookup: track_id -> cluster + scaled embedding (so inference needs no audio features)
     print("Building track lookup (track_id -> cluster + embedding)...")
     build_track_lookup(df, scaler, centroids, out_dir / "track_lookup.db")
+
+    # Compute and save eval metrics (silhouette, inertia, cluster sizes)
+    from recs.eval_model import eval_model
+    try:
+        metrics = eval_model(out_dir)
+        if "error" not in metrics:
+            metrics_path = out_dir / "eval_metrics.json"
+            with open(metrics_path, "w") as f:
+                json.dump(metrics, f, indent=2)
+            print(f"Eval metrics: silhouette={metrics.get('silhouette_score', 'N/A')}, inertia={metrics.get('inertia', 'N/A')}")
+    except Exception as e:
+        print(f"Could not compute eval metrics: {e}")
 
     print("Done.")
     return 0

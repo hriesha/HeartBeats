@@ -46,35 +46,29 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
       setIsLoading(true);
       setError(null);
       try {
-        const clusterData = await getClusterTracks(clusterId, bpm, 15);
+        // Limit to 20 tracks per cluster to avoid Spotify API rate limits
+        const clusterData = await getClusterTracks(clusterId, bpm, 20);
         if (!clusterData?.tracks?.length) {
           setError('No tracks found for this cluster. Try another vibe.');
           return;
         }
-        const trackIds = clusterData.tracks.map(t => t.track_id).filter(Boolean);
-        const detailsResponse = await getTrackDetails(trackIds);
-        const merged = detailsResponse?.tracks
-          ? mergeWithDetails(clusterData.tracks, detailsResponse.tracks)
-          : clusterData.tracks;
+        // Tracks already include name and artists from dataset, no need for getTrackDetails
+        const allClusterTracks = clusterData.tracks;
 
         if (cancelled) return;
 
-        const randomIdx = Math.floor(Math.random() * merged.length);
-        const randomTrack = merged[randomIdx];
+        // Pick a random track to start playing
+        const randomIdx = Math.floor(Math.random() * allClusterTracks.length);
+        const randomTrack = allClusterTracks[randomIdx];
         const tid = randomTrack.track_id ?? randomTrack.id;
         if (tid) await startPlayback([toUri(randomTrack)]);
 
-        const queueFromTrack = tid ? await getTracksFromTrack(tid, clusterId, 10) : null;
-        if (cancelled) return;
-
-        const queueList = queueFromTrack?.tracks ?? [];
-        const ids = queueList.map(t => t.track_id).filter(Boolean);
-        const det = ids.length ? await getTrackDetails(ids) : null;
-        const mergedQueue = det?.tracks ? mergeWithDetails(queueList, det.tracks) : queueList;
-        const filtered = mergedQueue.filter(
-          q => (q.track_id ?? q.id) !== tid
+        // Use all cluster tracks, but put the random track first
+        // Remove the random track from its original position and put it at the start
+        const otherTracks = allClusterTracks.filter(
+          (t, idx) => idx !== randomIdx
         );
-        setTracks([randomTrack, ...filtered]);
+        setTracks([randomTrack, ...otherTracks]);
         setNowPlayingIndex(0);
       } catch (err) {
         if (!cancelled) {
@@ -100,10 +94,8 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     if (!tid) return;
     const from = await getTracksFromTrack(tid, clusterId, 10);
     if (!from?.tracks?.length) return;
-    const ids = from.tracks.map(t => t.track_id).filter(Boolean);
-    const det = await getTrackDetails(ids);
-    const merged = det?.tracks ? mergeWithDetails(from.tracks, det.tracks) : from.tracks;
-    const add = merged.filter(m => (m.track_id ?? m.id) !== tid);
+    // Tracks already include metadata, no need for getTrackDetails
+    const add = from.tracks.filter(m => (m.track_id ?? m.id) !== tid);
     setTracks(prev => {
       const rest = prev.slice(nextIdx + 1);
       const seen = new Set(rest.map(t => t.track_id ?? t.id));

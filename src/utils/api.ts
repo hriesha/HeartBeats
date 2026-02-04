@@ -100,9 +100,9 @@ export async function runClustering(
 ): Promise<ClusteringResponse | null> {
   try {
     // Use recs model by default - it converts pace to BPM automatically
+    // Clusters tracks from the dataset (not user's library)
     const body: any = {
       use_recs_model: true,
-      use_spotify_library: true,
       pace_value: paceValue,
       pace_unit: paceUnit,
     };

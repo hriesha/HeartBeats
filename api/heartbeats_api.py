@@ -97,6 +97,12 @@ _tempo_lookup_cache: Optional[Dict[str, float]] = None
 # Cache for audio features lookup from training CSV
 _audio_features_lookup_cache: Optional[Dict[str, Dict[str, float]]] = None
 
+# Rate limit safety: Max tracks per cluster to avoid hitting Spotify API limits
+# Spotify allows ~300 requests/30s, and 50 tracks per request = 15k tracks/30s theoretical max
+# We use 25 as a safe, conservative limit per cluster
+MAX_TRACKS_PER_CLUSTER = 25
+MAX_TRACKS_FOR_KNN = 15  # For queue extension (KNN from track)
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
 
@@ -122,6 +128,7 @@ _cluster_method: str = "kmeans"  # "kmeans" | "gmm"
 _spotify: Optional[SpotifyIntegration] = None
 _spotify_cc = None  # spotipy client-credentials client
 _predicted_features_cache: Dict[str, dict] = {}  # track_id -> predicted audio features (for KNN)
+_dataset_metadata: Dict[str, Dict[str, Any]] = {}  # track_id -> {track_name, artists, album_name} from CSV
 
 
 def _load_features_from_annas_archive(limit: int = ANNAS_DEFAULT_LIMIT) -> pd.DataFrame:
@@ -388,11 +395,13 @@ def _knn_on_df(
     cluster_id_override: Optional[int] = None,
 ) -> pd.DataFrame:
     """Run KNN on the given df (no cluster filtering). Returns same schema as knn_in_cluster."""
+    global _dataset_metadata
     if df.empty:
         return pd.DataFrame()
     X = df[FEATURE_COLS].values.astype(float)
     X_scaled = scaler.transform(X)
     n_neighbors = min(topk, len(df))
+    log.debug(f"_knn_on_df: df has {len(df)} tracks, requesting {topk} neighbors, will return {n_neighbors}")
     nn = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean")
     nn.fit(X_scaled)
     query = np.array([
@@ -406,14 +415,22 @@ def _knn_on_df(
     dists, inds = nn.kneighbors(query_scaled)
     dists = dists[0]
     inds = inds[0]
+    log.debug(f"_knn_on_df: KNN found {len(inds)} neighbors")
     rows = []
     for rank, (idx, d) in enumerate(zip(inds, dists), start=1):
         r = df.iloc[idx]
+        tid = str(r.get("track_id"))
         c = int(cluster_id_override) if cluster_id_override is not None else int(r.get("cluster"))
+        
+        # Get metadata from dataset lookup or dataframe
+        metadata = _dataset_metadata.get(tid, {})
+        track_name = r.get("name") or metadata.get("track_name", "")
+        artists = r.get("artists") or metadata.get("artists", "")
+        
         out = {
-            "track_id": r.get("track_id"),
-            "name": r.get("name"),
-            "artists": r.get("artists"),
+            "track_id": tid,
+            "name": track_name,
+            "artists": artists,
             "cluster": c,
             "tempo": float(r["tempo"]),
             "energy": float(r["energy"]),
@@ -457,6 +474,7 @@ def _knn_from_track(
     KNN using a track's feature vector as query (not BPM).
     Excludes the query track from results.
     """
+    global _dataset_metadata
     row = df[df["track_id"].astype(str) == str(track_id)]
     if row.empty:
         return pd.DataFrame()
@@ -489,11 +507,18 @@ def _knn_from_track(
     rows = []
     for rank, (idx, d) in enumerate(zip(inds, dists), start=1):
         r = df_cand.iloc[idx]
+        tid = str(r.get("track_id"))
         c = int(cluster_id) if cluster_id is not None else int(r.get("cluster"))
+        
+        # Get metadata from dataset lookup or dataframe
+        metadata = _dataset_metadata.get(tid, {})
+        track_name = r.get("name") or metadata.get("track_name", "")
+        artists = r.get("artists") or metadata.get("artists", "")
+        
         out = {
-            "track_id": r.get("track_id"),
-            "name": r.get("name"),
-            "artists": r.get("artists"),
+            "track_id": tid,
+            "name": track_name,
+            "artists": artists,
             "cluster": c,
             "tempo": float(r["tempo"]),
             "energy": float(r["energy"]),
@@ -1108,22 +1133,10 @@ def get_clusters():
                     "success": False,
                     "error": "recs module not available. Make sure it's installed and models are trained.",
                 }), 503
-            if not use_spotify_library:
-                return jsonify({
-                    "success": False,
-                    "error": "use_spotify_library must be True when using recs model.",
-                }), 400
+            # No longer require Spotify connection - we cluster the dataset instead
+            # (Spotify OAuth still needed for playback, but not for clustering)
 
-            # Check Spotify connection
-            try:
-                _get_user_saved_track_ids()
-            except RuntimeError as e:
-                return jsonify({
-                    "success": False,
-                    "error": f"Spotify not connected: {str(e)}. Please connect Spotify first.",
-                }), 401
-
-        if use_recs_model and RECS_AVAILABLE and get_cluster_for_track is not None and use_spotify_library:
+        if use_recs_model and RECS_AVAILABLE:
             try:
                 # Resolve target BPM from pace or bpm
                 target_bpm = _resolve_target_bpm(data)
@@ -1134,143 +1147,181 @@ def get_clusters():
                     }), 400
 
                 log.info(f"Target BPM resolved: {target_bpm}")
-                ids = _get_user_saved_track_ids()
-                log.info(f"Retrieved {len(ids)} saved track IDs from Spotify")
-                if not ids:
-                    return jsonify({
-                        "success": True,
-                        "clusters": [],
-                        "total_tracks": 0,
-                        "cluster_method": "recs",
-                        "message": "No saved tracks found. Save some tracks in Spotify first.",
-                    })
-
-                log.info(f"Filtering {len(ids)} user tracks by BPM {target_bpm} +/- 15...")
-
-                # OPTIMIZATION: Load tempo lookup first (cached after first call)
-                log.info("Loading tempo lookup...")
-                tempo_lookup = _load_tempo_lookup()
-                log.info("Loading audio features lookup...")
-                audio_features_lookup = _load_audio_features_lookup()
-                log.info(f"Tempo lookup ready: {len(tempo_lookup)} tracks, Audio features: {len(audio_features_lookup)} tracks")
-
-                # SKIP ALL SPOTIFY API CALLS - Only use tracks in our trained model
-                log.info("Filtering tracks by tempo and checking for audio features (NO API calls)...")
-                filtered_tracks: List[tuple] = []  # (track_id, tempo, audio_features)
                 
-                tracks_in_lookup = 0
-                tracks_not_in_lookup = 0
-                tracks_in_range = 0
-                tracks_out_of_range = 0
-                tracks_with_features = 0
-                tracks_skipped_no_features = 0
-
-                # Only process tracks that are in BPM range AND have audio features in lookup
-                for tid in ids:
-                    # Get tempo from lookup (if track is in our training dataset)
-                    tempo = tempo_lookup.get(tid)
-                    if tempo is None:
-                        # Track exists in user's library but NOT in our training dataset lookup
-                        tracks_not_in_lookup += 1
-                        continue
-                    
-                    tracks_in_lookup += 1
-
-                    # Filter by BPM range
-                    if abs(tempo - target_bpm) <= 15:
-                        tracks_in_range += 1
-                        
-                        # Get audio features from lookup (skip if not available)
-                        audio_features = audio_features_lookup.get(tid)
-                        
-                        if audio_features:
-                            tracks_with_features += 1
-                            filtered_tracks.append((tid, tempo, audio_features))
-                            # Limit to 200 tracks max for faster clustering
-                            if len(filtered_tracks) >= 200:
-                                break
-                        else:
-                            tracks_skipped_no_features += 1
-                    else:
-                        tracks_out_of_range += 1
-
-                log.info(f"Lookup stats: {tracks_in_lookup} tracks found in training dataset, {tracks_not_in_lookup} tracks NOT in training dataset")
-                log.info(f"BPM range stats: {tracks_in_range} in range ({target_bpm}±15), {tracks_out_of_range} out of range")
-                log.info(f"Features stats: {tracks_with_features} with audio features, {tracks_skipped_no_features} missing audio features")
-                log.info(f"Final filtered: {len(filtered_tracks)} tracks ready for clustering (using trained model only, NO API calls)")
-
-                if not filtered_tracks:
+                # Load dataset from training CSV instead of user's library
+                model_dir = Path(__file__).resolve().parent.parent / "recs" / "model"
+                dataset_path = model_dir / "test_set.csv"  # Use test_set.csv (has all tracks with metadata)
+                
+                # Fallback to original Kaggle dataset if test_set doesn't exist
+                if not dataset_path.exists():
+                    dataset_path = Path("/Users/saachidhamija/Downloads/spotify-kaggle-dataset.csv")
+                    if not dataset_path.exists():
+                        return jsonify({
+                            "success": False,
+                            "error": "Dataset CSV not found. Please ensure training dataset is available.",
+                        }), 404
+                
+                log.info(f"Loading tracks from dataset: {dataset_path}")
+                df_dataset = pd.read_csv(dataset_path, low_memory=False)
+                
+                # Standardize column names
+                if "id" in df_dataset.columns and "track_id" not in df_dataset.columns:
+                    df_dataset = df_dataset.rename(columns={"id": "track_id"})
+                
+                # Ensure required columns exist
+                required_cols = ["track_id"] + FEATURE_COLS
+                missing_cols = [c for c in required_cols if c not in df_dataset.columns]
+                if missing_cols:
+                    return jsonify({
+                        "success": False,
+                        "error": f"Dataset missing required columns: {missing_cols}",
+                    }), 400
+                
+                log.info(f"Loaded {len(df_dataset):,} tracks from dataset")
+                
+                # Filter by BPM range
+                log.info(f"Filtering dataset tracks by BPM {target_bpm} +/- 15...")
+                df_filtered = df_dataset[
+                    (df_dataset["tempo"] > 0) & 
+                    (df_dataset["tempo"].notna()) &
+                    (abs(df_dataset["tempo"] - target_bpm) <= 15)
+                ].copy()
+                
+                log.info(f"Filtered to {len(df_filtered):,} tracks in BPM range (from {len(df_dataset):,} total)")
+                
+                if len(df_filtered) == 0:
                     return jsonify({
                         "success": True,
                         "clusters": [],
-                        "total_tracks": len(ids),
+                        "total_tracks": len(df_dataset),
                         "filtered_tracks": 0,
                         "cluster_method": "recs",
-                        "message": f"No tracks found within {target_bpm} +/- 15 BPM. Found {tracks_in_lookup} tracks in training dataset, {tracks_in_range} in BPM range, but none had audio features. Try a different pace or ensure your tracks are in the training dataset.",
-                        "stats": {
-                            "tracks_in_lookup": tracks_in_lookup,
-                            "tracks_not_in_lookup": tracks_not_in_lookup,
-                            "tracks_in_range": tracks_in_range,
-                            "tracks_out_of_range": tracks_out_of_range,
-                            "tracks_with_features": tracks_with_features,
-                            "tracks_skipped_no_features": tracks_skipped_no_features,
-                        },
+                        "message": f"No tracks found within {target_bpm} +/- 15 BPM. Try a different pace.",
                     })
+                
+                # Limit to reasonable number for clustering (max 5000 tracks)
+                if len(df_filtered) > 5000:
+                    log.info(f"Limiting to 5000 tracks for faster clustering (sampling from {len(df_filtered):,})")
+                    df_filtered = df_filtered.sample(n=5000, random_state=42).reset_index(drop=True)
+                
+                # Prepare filtered tracks for clustering
+                filtered_tracks: List[tuple] = []
+                for _, row in df_filtered.iterrows():
+                    filtered_tracks.append((
+                        str(row["track_id"]),
+                        float(row["tempo"]),
+                        {
+                            "tempo": float(row["tempo"]),
+                            "energy": float(row["energy"]),
+                            "danceability": float(row["danceability"]),
+                            "valence": float(row["valence"]),
+                            "loudness": float(row["loudness"]),
+                        }
+                    ))
+                
+                log.info(f"Prepared {len(df_filtered)} tracks for clustering")
 
                 # Step 2: Cluster only the filtered tracks
-                # Build DataFrame from filtered tracks with audio features
-                filtered_data = []
-                for tid, tempo, audio_features in filtered_tracks:
-                    filtered_data.append({
-                        "track_id": tid,
-                        "tempo": audio_features.get("tempo", tempo),
-                        "energy": audio_features.get("energy", 0.5),
-                        "danceability": audio_features.get("danceability", 0.5),
-                        "valence": audio_features.get("valence", 0.5),
-                        "loudness": audio_features.get("loudness", -10.0),
-                    })
-
-                df_filtered = pd.DataFrame(filtered_data)
+                # Keep metadata separate, prepare features-only dataframe for clustering
+                df_features = df_filtered[["track_id"] + FEATURE_COLS].copy()
+                
+                # Ensure all feature columns are numeric and valid
+                for col in FEATURE_COLS:
+                    df_features[col] = pd.to_numeric(df_features[col], errors='coerce')
+                
+                # Drop any rows with NaN in features
+                df_features = df_features.dropna(subset=FEATURE_COLS)
+                
+                log.info(f"Final dataset for clustering: {len(df_features)} tracks")
 
                 # Cluster using KMeans
-                n_clusters_actual = min(n_clusters, len(df_filtered))  # Don't cluster more than tracks
+                n_clusters_actual = min(n_clusters, len(df_features))  # Don't cluster more than tracks
                 if n_clusters_actual < 2:
                     n_clusters_actual = 1
 
-                X = df_filtered[FEATURE_COLS].values.astype(float)
+                X = df_features[FEATURE_COLS].values.astype(float)
                 scaler_filtered = StandardScaler()
                 X_scaled = scaler_filtered.fit_transform(X)
 
                 km = KMeans(n_clusters=n_clusters_actual, random_state=42, n_init=10)
                 labels = km.fit_predict(X_scaled)
-                df_filtered["cluster"] = labels
+                df_features["cluster"] = labels
 
-                # Store for KNN later
-                global _clustered_df, _scaler
-                _clustered_df = df_filtered
+                # Log cluster sizes
+                cluster_counts = pd.Series(labels).value_counts().sort_index()
+                log.info(f"Cluster sizes: {dict(cluster_counts)}")
+                for cid, count in cluster_counts.items():
+                    if count < 5:
+                        log.warning(f"Cluster {cid} has only {count} tracks - may result in limited recommendations")
+
+                # Store for KNN later - store features + cluster assignments
+                global _clustered_df, _scaler, _dataset_metadata
+                _clustered_df = df_features.copy()  # Features + cluster for KNN
                 _scaler = scaler_filtered
                 _cluster_method = "kmeans"
                 _last_bpm = target_bpm
-
-                # Build cluster stats
-                by_cluster: Dict[int, List[str]] = {}
+                
+                # Store dataset metadata lookup for track names/artists (convert track_id to string for lookup)
+                _dataset_metadata = {}
                 for _, row in df_filtered.iterrows():
+                    tid = str(row["track_id"])
+                    _dataset_metadata[tid] = {
+                        "track_name": str(row.get("track_name", row.get("name", ""))),
+                        "artists": str(row.get("artists", row.get("artist_names", ""))),
+                        "album_name": str(row.get("album_name", row.get("album", ""))),
+                    }
+                log.info(f"Stored metadata for {len(_dataset_metadata)} tracks")
+
+                # Merge cluster assignments back with full dataset (includes metadata)
+                df_clustered = df_features[["track_id", "cluster"]].merge(
+                    df_filtered,
+                    on="track_id",
+                    how="inner"
+                )
+                
+                # Build cluster stats with track metadata from CSV
+                by_cluster: Dict[int, List[str]] = {}
+                track_metadata: Dict[str, dict] = {}  # track_id -> {name, artists, etc.}
+                
+                for _, row in df_clustered.iterrows():
                     cid = int(row["cluster"])
                     tid = str(row["track_id"])
                     by_cluster.setdefault(cid, []).append(tid)
+                    
+                    # Store metadata from CSV for cluster naming
+                    track_metadata[tid] = {
+                        "name": str(row.get("track_name", row.get("name", ""))),
+                        "artists": str(row.get("artists", row.get("artist_names", ""))),
+                        "album": str(row.get("album_name", row.get("album", ""))),
+                    }
 
-                # SKIP fetching track details from Spotify API - use generic cluster names
+                # Generate cluster names from top artists in each cluster
                 top_artists_map = {}
                 colors = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049", "#9B59B6", "#2ECC71", "#3498DB"]
-                # Generate cluster names based on audio features instead of artists
+                
                 for cid, tids in sorted(by_cluster.items()):
-                    cluster_data = df_filtered[df_filtered["cluster"] == cid]
+                    cluster_data = df_clustered[df_clustered["cluster"] == cid]
                     mean_energy = cluster_data["energy"].mean()
                     mean_danceability = cluster_data["danceability"].mean()
                     mean_valence = cluster_data["valence"].mean()
                     
-                    # Generate name based on features
-                    if mean_energy > 0.7 and mean_danceability > 0.7:
+                    # Get top artists from cluster tracks
+                    artist_counts: Counter = Counter()
+                    for tid in tids[:200]:  # Sample first 200 tracks
+                        artists_str = track_metadata.get(tid, {}).get("artists", "")
+                        if artists_str:
+                            # Parse artists (handle comma/ampersand separated)
+                            artists = [a.strip() for a in re.split(r",|&", artists_str) if a.strip()]
+                            for artist in artists[:2]:  # Max 2 artists per track
+                                artist_counts[artist] += 1
+                    
+                    # Get top 2-3 artists
+                    top_artists = [artist for artist, _ in artist_counts.most_common(3)]
+                    
+                    # Generate name: use top artists if available, otherwise use features
+                    if top_artists:
+                        name = ", ".join(top_artists[:2])
+                    elif mean_energy > 0.7 and mean_danceability > 0.7:
                         name = "High Energy"
                     elif mean_energy < 0.4 and mean_valence < 0.4:
                         name = "Chill Vibes"
@@ -1280,19 +1331,21 @@ def get_clusters():
                         name = "Happy Vibes"
                     else:
                         name = f"Vibe {cid}"
-                    top_artists_map[cid] = [name]
+                    
+                    top_artists_map[cid] = top_artists if top_artists else [name]
 
                 cluster_stats = []
                 for cid in sorted(by_cluster.keys()):
-                    cluster_data = df_filtered[df_filtered["cluster"] == cid]
+                    cluster_data = df_clustered[df_clustered["cluster"] == cid]
                     tids = by_cluster[cid]
+                    cluster_name = ", ".join(top_artists_map.get(cid, [])) if top_artists_map.get(cid) else f"Vibe {cid}"
                     cluster_stats.append({
                         "cluster_id": int(cid),
                         "count": len(tids),
                         "mean_tempo": float(cluster_data["tempo"].mean()),
                         "mean_energy": float(cluster_data["energy"].mean()),
                         "mean_danceability": float(cluster_data["danceability"].mean()),
-                        "name": ", ".join(top_artists_map.get(cid, [])) or f"Vibe {cid}",
+                        "name": cluster_name,
                         "top_artists": top_artists_map.get(cid, []),
                         "tags": [],
                         "color": colors[int(cid) % len(colors)],
@@ -1304,20 +1357,12 @@ def get_clusters():
                 return jsonify({
                     "success": True,
                     "clusters": cluster_stats,
-                    "total_tracks": len(ids),
+                    "total_tracks": len(df_dataset),
                     "filtered_tracks": len(filtered_tracks),
                     "cluster_method": "recs",
                     "target_bpm": target_bpm,
                     "bpm_range": f"{target_bpm - 15:.1f} - {target_bpm + 15:.1f}",
-                    "stats": {
-                        "tracks_in_lookup": tracks_in_lookup,
-                        "tracks_not_in_lookup": tracks_not_in_lookup,
-                        "tracks_in_range": tracks_in_range,
-                        "tracks_out_of_range": tracks_out_of_range,
-                        "tracks_with_features": tracks_with_features,
-                        "tracks_skipped_no_features": tracks_skipped_no_features,
-                        "note": "Using trained model only - no Spotify API calls",
-                    },
+                    "note": "Clustering dataset tracks (not user library) - no Spotify API calls needed",
                 })
             except Exception as e:
                 log.error("use_recs_model path failed: %r", e, exc_info=True)
@@ -1499,12 +1544,45 @@ def get_tracks():
         df_candidates = _cluster_df_for_knn(
             _clustered_df, cluster_id, prob_threshold, _cluster_method
         )
+        log.info(f"Cluster {cluster_id}: Found {len(df_candidates)} candidate tracks for KNN (requested topk={topk})")
         if df_candidates.empty:
             return jsonify({"success": False, "error": "No tracks found"}), 404
 
-        picks = _knn_on_df(
-            df_candidates, _scaler, target_bpm, topk, cluster_id_override=cluster_id
-        )
+        # If cluster has very few tracks (<= topk), return all tracks sorted by tempo similarity
+        # Otherwise use KNN to find best matches
+        if len(df_candidates) <= topk:
+            log.info(f"Cluster {cluster_id} has {len(df_candidates)} tracks (<= {topk}), returning all tracks")
+            # Sort by tempo similarity to target_bpm
+            df_candidates = df_candidates.copy()
+            df_candidates["tempo_diff"] = (df_candidates["tempo"] - target_bpm).abs()
+            picks = df_candidates.nsmallest(len(df_candidates), "tempo_diff")
+            # Add metadata and format
+            picks_dict = picks.to_dict("records")
+            formatted_picks = []
+            for pick in picks_dict:
+                tid = str(pick["track_id"])
+                metadata = _dataset_metadata.get(tid, {})
+                track_name = pick.get("name") or metadata.get("track_name", "")
+                artists = pick.get("artists") or metadata.get("artists", "")
+                formatted_picks.append({
+                    "track_id": tid,
+                    "name": track_name,
+                    "artists": artists,
+                    "cluster": int(pick.get("cluster", cluster_id)),
+                    "tempo": float(pick["tempo"]),
+                    "energy": float(pick.get("energy", 0)),
+                    "danceability": float(pick.get("danceability", 0)),
+                    "valence": float(pick.get("valence", 0)),
+                    "loudness": float(pick.get("loudness", 0)),
+                    "distance": float(pick.get("tempo_diff", 0)),
+                    "rank": len(formatted_picks) + 1,
+                })
+            picks = pd.DataFrame(formatted_picks)
+        else:
+            picks = _knn_on_df(
+                df_candidates, _scaler, target_bpm, topk, cluster_id_override=cluster_id
+            )
+        log.info(f"Returning {len(picks)} tracks for cluster {cluster_id} (requested topk={topk})")
         if picks.empty:
             return jsonify({"success": False, "error": "No tracks found"}), 404
 
@@ -1533,13 +1611,13 @@ def get_tracks_from_track():
     3. Metadata prediction (on-the-fly)
     4. Fallback to in-memory clustering
     """
-    global _clustered_df, _scaler, _predicted_features_cache
+    global _clustered_df, _scaler, _predicted_features_cache, _spotify
 
     try:
         data = request.get_json() or {}
         track_id = data.get("track_id")
         cluster_id = data.get("cluster_id")
-        topk = data.get("topk", 10)
+        topk = min(data.get("topk", 10), MAX_TRACKS_FOR_KNN)  # Cap at rate limit safe max for queue extension
         use_recs_flag = data.get("use_recs", True)
 
         if not track_id:
@@ -1618,12 +1696,45 @@ def get_tracks_from_track():
         if picks.empty:
             return jsonify({"success": False, "error": "Track not found or no neighbors"}), 404
 
-        tracks = picks.to_dict("records")
+        # Get Spotify track details for playback (batch efficiently)
+        track_ids = picks["track_id"].tolist()
+        tracks_with_details = []
+        
+        if SPOTIFY_AVAILABLE:
+            if _spotify is None:
+                try:
+                    _spotify = SpotifyIntegration()
+                    _spotify.connect()
+                except Exception as e:
+                    log.warning(f"Spotify connection failed: {e}, using dataset metadata only")
+            
+            if _spotify and _spotify.is_connected():
+                try:
+                    # Batch fetch: Spotify allows 50 tracks per request
+                    spotify_tracks = _spotify.get_tracks(track_ids)
+                    spotify_map = {t["id"]: _spotify.format_track_for_display(t) for t in spotify_tracks if t}
+                    
+                    # Merge Spotify details with KNN metadata
+                    picks_dict = picks.to_dict("records")
+                    for pick in picks_dict:
+                        tid = str(pick["track_id"])
+                        spotify_detail = spotify_map.get(tid, {})
+                        # Merge: Spotify details override, but keep KNN metadata
+                        merged = {**pick, **spotify_detail}
+                        tracks_with_details.append(merged)
+                except Exception as e:
+                    log.warning(f"Failed to fetch Spotify details: {e}, using dataset metadata")
+                    tracks_with_details = picks.to_dict("records")
+            else:
+                tracks_with_details = picks.to_dict("records")
+        else:
+            tracks_with_details = picks.to_dict("records")
+        
         return jsonify({
             "success": True,
             "cluster_id": int(cluster_id) if cluster_id is not None else None,
-            "tracks": tracks,
-            "count": len(tracks),
+            "tracks": tracks_with_details,
+            "count": len(tracks_with_details),
             "source": "in_memory",
         })
     except Exception as e:
@@ -1634,8 +1745,10 @@ def get_tracks_from_track():
 @app.route('/api/tracks/details', methods=['POST'])
 def get_track_details():
     """
-    Get full track details from Spotify API for a list of track IDs.
+    Get track details from dataset metadata (CSV) or Spotify API fallback.
+    Since we're clustering dataset tracks, prefer CSV metadata (faster, no API calls).
     """
+    global _dataset_metadata
     try:
         data = request.get_json() or {}
         track_ids = data.get("track_ids", [])
@@ -1643,7 +1756,43 @@ def get_track_details():
         if not track_ids:
             return jsonify({"success": False, "error": "track_ids is required"}), 400
 
-        formatted_tracks = _fetch_spotify_track_details_internal(track_ids)
+        # Try to get metadata from dataset first (fast, no API calls)
+        formatted_tracks = []
+        missing_ids = []
+        
+        for tid in track_ids:
+            tid_str = str(tid)
+            metadata = _dataset_metadata.get(tid_str)
+            if metadata:
+                # Use CSV metadata
+                formatted_tracks.append({
+                    "id": tid_str,
+                    "track_id": tid_str,
+                    "name": metadata.get("track_name", ""),
+                    "artist_names": metadata.get("artists", ""),
+                    "artists": metadata.get("artists", "").split(", ") if metadata.get("artists") else [],
+                    "album": metadata.get("album_name", ""),
+                    "preview_url": None,  # Not available in CSV
+                    "external_urls": f"https://open.spotify.com/track/{tid_str}",
+                })
+            else:
+                missing_ids.append(tid_str)
+        
+        # If some tracks not in dataset, try Spotify API (but this should be rare now)
+        if missing_ids and SPOTIFY_AVAILABLE:
+            try:
+                spotify_tracks = _fetch_spotify_track_details_internal(missing_ids)
+                formatted_tracks.extend(spotify_tracks)
+            except Exception as e:
+                log.warning(f"Could not fetch {len(missing_ids)} tracks from Spotify: {e}")
+                # Add placeholders for missing tracks
+                for tid in missing_ids:
+                    formatted_tracks.append({
+                        "id": tid,
+                        "track_id": tid,
+                        "name": f"Track {tid[:8]}...",
+                        "artist_names": "Unknown",
+                    })
 
         return jsonify({
             "success": True,
@@ -1662,7 +1811,7 @@ def get_cluster_tracks():
     Combined: Get tracks for BPM + cluster, then fetch full details.
     Body: bpm (or pace_value + pace_unit via recs), cluster_id (optional), topk, prob_threshold (GMM only).
     """
-    global _clustered_df, _scaler, _spotify, _cluster_method
+    global _clustered_df, _scaler, _spotify, _cluster_method, _dataset_metadata
 
     try:
         data = request.get_json() or {}
@@ -1670,7 +1819,7 @@ def get_cluster_tracks():
         if target_bpm is None:
             target_bpm = _resolve_target_bpm(data)
         cluster_id = data.get("cluster_id")
-        topk = data.get("topk", 10)
+        topk = min(data.get("topk", 10), MAX_TRACKS_PER_CLUSTER)  # Cap at rate limit safe max
         prob_threshold = data.get("prob_threshold")
 
         if target_bpm is None:
@@ -1697,42 +1846,46 @@ def get_cluster_tracks():
         if picks.empty:
             return jsonify({"success": False, "error": "No tracks found"}), 404
 
+        # Get Spotify track details for playback (batch efficiently, max 50 per request)
         track_ids = picks["track_id"].tolist()
-
-        # Get full track details from Spotify
-        if _spotify is None:
-            try:
-                _spotify = SpotifyIntegration()
-                _spotify.connect()
-            except Exception as e:
-                log.warning(f"Spotify connection failed: {e}, returning basic track info")
-
-        if _spotify and _spotify.is_connected():
-            tracks_full = _spotify.get_tracks(track_ids)
-            formatted_tracks = [_spotify.format_track_for_display(t) for t in tracks_full if t]
-
-            # Merge with KNN metadata
-            track_map = {t["track_id"]: t for t in picks.to_dict("records")}
-            for track_detail in formatted_tracks:
-                track_id = track_detail.get("id")
-                if track_id in track_map:
-                    track_detail.update(track_map[track_id])
-
-            return jsonify({
-                "success": True,
-                "cluster_id": cluster_id,
-                "tracks": formatted_tracks,
-                "count": len(formatted_tracks)
-            })
+        tracks_with_details = []
+        
+        if SPOTIFY_AVAILABLE:
+            if _spotify is None:
+                try:
+                    _spotify = SpotifyIntegration()
+                    _spotify.connect()
+                except Exception as e:
+                    log.warning(f"Spotify connection failed: {e}, using dataset metadata only")
+            
+            if _spotify and _spotify.is_connected():
+                try:
+                    # Batch fetch: Spotify allows 50 tracks per request
+                    spotify_tracks = _spotify.get_tracks(track_ids)
+                    spotify_map = {t["id"]: _spotify.format_track_for_display(t) for t in spotify_tracks if t}
+                    
+                    # Merge Spotify details with KNN metadata
+                    picks_dict = picks.to_dict("records")
+                    for pick in picks_dict:
+                        tid = str(pick["track_id"])
+                        spotify_detail = spotify_map.get(tid, {})
+                        # Merge: Spotify details override, but keep KNN metadata
+                        merged = {**pick, **spotify_detail}
+                        tracks_with_details.append(merged)
+                except Exception as e:
+                    log.warning(f"Failed to fetch Spotify details: {e}, using dataset metadata")
+                    tracks_with_details = picks.to_dict("records")
+            else:
+                tracks_with_details = picks.to_dict("records")
         else:
-            # Return basic info if Spotify fails
-            tracks = picks.to_dict("records")
-            return jsonify({
-                "success": True,
-                "cluster_id": cluster_id,
-                "tracks": tracks,
-                "count": len(tracks)
-            })
+            tracks_with_details = picks.to_dict("records")
+        
+        return jsonify({
+            "success": True,
+            "cluster_id": cluster_id,
+            "tracks": tracks_with_details,
+            "count": len(tracks_with_details),
+        })
 
     except Exception as e:
         log.error(f"Error in get_cluster_tracks: {e}")
