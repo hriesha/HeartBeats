@@ -49,8 +49,9 @@ class SpotifyIntegration:
     # Required scopes for HeartBeats functionality
     # user-library-read: Read user's saved tracks (for algorithm input)
     # user-read-private: Access user's email and subscription info
-    # user-read-playback-state: Read user's playback state (future use)
-    DEFAULT_SCOPES = "user-library-read user-read-private user-read-playback-state"
+    # user-read-playback-state: Read user's playback state
+    # user-modify-playback-state: Control playback (play, pause, skip)
+    DEFAULT_SCOPES = "user-library-read user-read-private user-read-playback-state user-modify-playback-state"
 
     def __init__(
         self,

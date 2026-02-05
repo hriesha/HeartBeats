@@ -2,7 +2,7 @@
  * API utility functions for HeartBeats backend
  */
 
-const API_ROOT = import.meta.env.VITE_API_URL || "http://localhost:5001";
+const API_ROOT = import.meta.env.VITE_API_URL || "http://localhost:8888";
 // Support either "http://host:port" or "http://host:port/api"
 const API_BASE_URL = API_ROOT.endsWith("/api") ? API_ROOT : `${API_ROOT}/api`;
 
@@ -42,6 +42,7 @@ export interface Track {
 export interface ClusteringResponse {
   clusters: Cluster[];
   total_tracks?: number;
+  message?: string;  // Optional message when no clusters found
 }
 
 export interface ClusterTracksResponse {
@@ -67,23 +68,89 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
-/**
- * Connect to Spotify
- */
-export async function connectSpotify(): Promise<{ success: boolean; user?: any; error?: string }> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/spotify/connect`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+// =============================================================================
+// Spotify OAuth Functions
+// =============================================================================
 
+/**
+ * Spotify user profile returned from /api/spotify/status
+ */
+export interface SpotifyUser {
+  id: string;
+  display_name: string;
+  email?: string;
+  product?: string;  // "premium" or "free"
+  images?: Array<{ url: string }>;
+}
+
+/**
+ * Response from /api/spotify/status
+ */
+export interface SpotifyStatus {
+  connected: boolean;
+  user?: SpotifyUser;
+  error?: string;
+}
+
+/**
+ * Check if user is authenticated with Spotify.
+ * Call this on app load to see if we can skip the login screen.
+ *
+ * Returns { connected: true, user: {...} } if authenticated,
+ * or { connected: false } if not.
+ */
+export async function checkSpotifyStatus(): Promise<SpotifyStatus> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/spotify/status`);
     const data = await response.json();
-    return data;
+    return {
+      connected: data.connected || false,
+      user: data.user,
+      error: data.error
+    };
   } catch (error) {
-    console.error('Spotify connection error:', error);
-    return { success: false, error: String(error) };
+    console.error('Spotify status check failed:', error);
+    return { connected: false, error: String(error) };
+  }
+}
+
+/**
+ * Get the Spotify OAuth authorization URL.
+ * Frontend should redirect the user to this URL to start the login flow.
+ *
+ * After the user logs in on Spotify, they'll be redirected back to
+ * /api/spotify/callback, which then redirects to the frontend with
+ * ?spotify_connected=true or ?spotify_error=...
+ */
+export async function getSpotifyAuthUrl(): Promise<string | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/spotify/auth-url`);
+    const data = await response.json();
+    if (data.success && data.auth_url) {
+      return data.auth_url;
+    }
+    console.error('Failed to get Spotify auth URL:', data.error);
+    return null;
+  } catch (error) {
+    console.error('Failed to get Spotify auth URL:', error);
+    return null;
+  }
+}
+
+/**
+ * Log out of Spotify (clear cached token on backend).
+ * After this, user will need to re-authorize on next visit.
+ */
+export async function logoutSpotify(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/spotify/logout`, {
+      method: 'POST'
+    });
+    const data = await response.json();
+    return data.success || false;
+  } catch (error) {
+    console.error('Spotify logout failed:', error);
+    return false;
   }
 }
 

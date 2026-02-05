@@ -16,7 +16,7 @@ from collections import Counter
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 
 # Load .env (Spotify credentials, etc.) if present
@@ -549,6 +549,183 @@ def health():
         except Exception:
             pass
     return jsonify(status)
+
+
+# =============================================================================
+# Spotify OAuth Endpoints
+# =============================================================================
+
+@app.route('/api/spotify/status', methods=['GET'])
+def spotify_status():
+    """
+    Check if user is authenticated with Spotify.
+    Returns user info if connected, or connected=false if not.
+
+    This is called by the frontend on app load to check if we can skip
+    the Spotify login screen (user already has a cached token).
+    """
+    global _spotify
+
+    if not SPOTIFY_AVAILABLE or SpotifyIntegration is None:
+        return jsonify({
+            "connected": False,
+            "error": "Spotify integration not available. Install spotipy and python-dotenv."
+        })
+
+    try:
+        if _spotify is None:
+            _spotify = SpotifyIntegration()
+
+        # Check if we have a cached token
+        token_info = _spotify.auth_manager.get_cached_token()
+
+        if token_info:
+            # Refresh token if expired
+            if _spotify.auth_manager.is_token_expired(token_info):
+                log.info("Cached token expired, refreshing...")
+                token_info = _spotify.auth_manager.refresh_access_token(token_info['refresh_token'])
+
+            # Initialize client if needed
+            if _spotify.sp is None:
+                import spotipy
+                _spotify.sp = spotipy.Spotify(auth_manager=_spotify.auth_manager)
+
+            # Verify connection by getting user info
+            user = _spotify.sp.current_user()
+            _spotify._current_user = user
+
+            return jsonify({
+                "connected": True,
+                "user": {
+                    "id": user.get("id"),
+                    "display_name": user.get("display_name"),
+                    "email": user.get("email"),
+                    "product": user.get("product"),  # "premium" or "free"
+                    "images": user.get("images", [])
+                }
+            })
+        else:
+            return jsonify({"connected": False})
+
+    except Exception as e:
+        log.warning("Spotify status check failed: %r", e)
+        return jsonify({"connected": False, "error": str(e)})
+
+
+@app.route('/api/spotify/auth-url', methods=['GET'])
+def spotify_auth_url():
+    """
+    Generate the Spotify OAuth authorization URL.
+
+    The frontend calls this, then redirects the user to the returned URL.
+    The user logs into Spotify, grants permissions, then Spotify redirects
+    them back to our /api/spotify/callback endpoint.
+    """
+    global _spotify
+
+    if not SPOTIFY_AVAILABLE or SpotifyIntegration is None:
+        return jsonify({
+            "success": False,
+            "error": "Spotify integration not available. Install spotipy and python-dotenv."
+        }), 503
+
+    try:
+        if _spotify is None:
+            _spotify = SpotifyIntegration()
+
+        # Get the authorization URL from Spotipy's auth manager
+        auth_url = _spotify.auth_manager.get_authorize_url()
+
+        log.info("Generated Spotify auth URL: %s", auth_url[:80] + "...")
+        return jsonify({
+            "success": True,
+            "auth_url": auth_url
+        })
+    except Exception as e:
+        log.error("Failed to generate Spotify auth URL: %r", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/callback', methods=['GET'])
+@app.route('/api/spotify/callback', methods=['GET'])
+def spotify_callback():
+    """
+    Handle the OAuth callback from Spotify.
+
+    After the user authorizes on Spotify's website, Spotify redirects them here
+    with a ?code=xxx parameter. We exchange that code for an access token,
+    then redirect the user back to the frontend with a success/error indicator.
+    """
+    global _spotify
+
+    code = request.args.get('code')
+    error = request.args.get('error')
+
+    # Get frontend URL from environment or default to Vite dev server
+    frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
+
+    if error:
+        log.error("Spotify OAuth error: %s", error)
+        return redirect(f"{frontend_url}?spotify_error={error}")
+
+    if not code:
+        log.error("Spotify OAuth callback missing code parameter")
+        return redirect(f"{frontend_url}?spotify_error=no_code")
+
+    try:
+        if _spotify is None:
+            _spotify = SpotifyIntegration()
+
+        # Exchange the authorization code for an access token
+        # Spotipy handles this and caches the token automatically
+        token_info = _spotify.auth_manager.get_access_token(code)
+
+        if token_info:
+            # Initialize the Spotify client with the new token
+            import spotipy
+            _spotify.sp = spotipy.Spotify(auth_manager=_spotify.auth_manager)
+            _spotify._current_user = _spotify.sp.current_user()
+
+            user_name = _spotify._current_user.get('display_name', 'Unknown')
+            log.info("Spotify OAuth successful for user: %s", user_name)
+
+            # Redirect back to frontend with success flag
+            return redirect(f"{frontend_url}?spotify_connected=true")
+        else:
+            log.error("Spotify OAuth: token exchange returned None")
+            return redirect(f"{frontend_url}?spotify_error=token_exchange_failed")
+
+    except Exception as e:
+        log.error("Spotify OAuth callback failed: %r", e)
+        # URL-encode the error message to avoid breaking the redirect
+        import urllib.parse
+        error_msg = urllib.parse.quote(str(e))
+        return redirect(f"{frontend_url}?spotify_error={error_msg}")
+
+
+@app.route('/api/spotify/logout', methods=['POST'])
+def spotify_logout():
+    """
+    Log out of Spotify by clearing the cached token.
+
+    After this, the user will need to re-authorize on their next visit.
+    """
+    global _spotify
+
+    try:
+        # Remove the cache file that stores the OAuth token
+        cache_path = ".cache-heartbeats"
+        if os.path.exists(cache_path):
+            os.remove(cache_path)
+            log.info("Removed Spotify token cache: %s", cache_path)
+
+        # Reset the global Spotify instance
+        _spotify = None
+
+        return jsonify({"success": True, "message": "Logged out of Spotify"})
+    except Exception as e:
+        log.error("Spotify logout failed: %r", e)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/recs/coverage', methods=['GET', 'POST'])
@@ -1982,7 +2159,7 @@ def not_found(error):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))  # Changed from 5000 to 5001 (5000 is used by AirPlay)
+    port = int(os.environ.get("PORT", 8888))  # Using 8888 to match Spotify redirect URI
     host = "127.0.0.1"
     print(f"\n🚀 HeartBeats API Server")
     print(f"📍 Running on http://{host}:{port}")

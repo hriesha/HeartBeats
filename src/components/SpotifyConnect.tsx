@@ -1,40 +1,40 @@
 import { motion } from 'motion/react';
-import { Music, ChevronLeft, Check } from 'lucide-react';
+import { Music, AlertCircle } from 'lucide-react';
 import { useState } from 'react';
+import { getSpotifyAuthUrl } from '../utils/api';
 
 interface SpotifyConnectProps {
-  onConnected: () => void;
-  onBack?: () => void;
+  onConnected?: () => void;  // Optional - not used with redirect flow, but kept for compatibility
   onSkip?: () => void;
 }
 
-export function SpotifyConnect({ onConnected, onBack, onSkip }: SpotifyConnectProps) {
+export function SpotifyConnect({ onSkip }: SpotifyConnectProps) {
   const [isConnecting, setIsConnecting] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Note: isConnected state removed - with OAuth redirect flow, user is redirected
+  // to Spotify then back to the app, so this component unmounts during the process
 
   const handleConnect = async () => {
     setIsConnecting(true);
+    setError(null);
 
     try {
-      // TODO: Replace with actual backend API call
-      // For now, simulate connection
-      // const response = await fetch('/api/spotify/connect', { method: 'POST' });
-      // const data = await response.json();
+      // Get the Spotify authorization URL from backend
+      const authUrl = await getSpotifyAuthUrl();
 
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      setIsConnected(true);
+      if (authUrl) {
+        // Redirect user to Spotify login page
+        // After login, Spotify will redirect back to our callback endpoint
+        // which then redirects to frontend with ?spotify_connected=true
+        window.location.href = authUrl;
+      } else {
+        throw new Error('Failed to get Spotify authorization URL. Make sure the backend is running.');
+      }
+    } catch (err) {
+      console.error('Failed to start Spotify OAuth:', err);
+      setError(String(err));
       setIsConnecting(false);
-
-      // Auto-advance after showing success
-      setTimeout(() => {
-        onConnected();
-      }, 1500);
-    } catch (error) {
-      console.error('Failed to connect to Spotify:', error);
-      setIsConnecting(false);
-      // TODO: Show error message to user
     }
   };
 
@@ -50,28 +50,8 @@ export function SpotifyConnect({ onConnected, onBack, onSkip }: SpotifyConnectPr
 
       {/* Content */}
       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 py-12">
-        {/* Back Button */}
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="absolute top-4 left-4 p-2 rounded-full transition-all z-20"
-            style={{
-              backgroundColor: 'rgba(0, 48, 73, 0.8)',
-              color: '#FCBF49'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(0, 48, 73, 1)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(0, 48, 73, 0.8)';
-            }}
-          >
-            <ChevronLeft className="w-6 h-6" />
-          </button>
-        )}
-
         {/* Skip Button */}
-        {onSkip && !isConnected && (
+        {onSkip && (
           <button
             onClick={onSkip}
             className="absolute top-4 right-4 p-2 transition-all z-20"
@@ -124,79 +104,40 @@ export function SpotifyConnect({ onConnected, onBack, onSkip }: SpotifyConnectPr
         </div>
 
         {/* Spotify Icon/Logo */}
-        {!isConnected ? (
-          <motion.div
-            className="mb-12"
-            animate={isConnecting ? {
-              scale: [1, 1.1, 1],
-            } : {}}
-            transition={{
-              duration: 1.5,
-              repeat: isConnecting ? Infinity : 0,
-              ease: "easeInOut"
+        <motion.div
+          className="mb-12"
+          animate={isConnecting ? {
+            scale: [1, 1.1, 1],
+          } : {}}
+          transition={{
+            duration: 1.5,
+            repeat: isConnecting ? Infinity : 0,
+            ease: "easeInOut"
+          }}
+        >
+          <div
+            className="rounded-full p-8"
+            style={{
+              background: isConnecting
+                ? 'linear-gradient(135deg, #1DB954 0%, #1ed760 100%)'
+                : 'linear-gradient(135deg, rgba(252, 191, 73, 0.15) 0%, rgba(247, 127, 0, 0.15) 100%)',
+              border: '2px solid #FCBF49',
+              boxShadow: isConnecting
+                ? '0 8px 32px rgba(29, 185, 84, 0.5)'
+                : '0 8px 24px rgba(252, 191, 73, 0.3)',
+              width: '140px',
+              height: '140px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
             }}
           >
-            <div
-              className="rounded-full p-8"
-              style={{
-                background: isConnecting
-                  ? 'linear-gradient(135deg, #1DB954 0%, #1ed760 100%)'
-                  : 'linear-gradient(135deg, rgba(252, 191, 73, 0.15) 0%, rgba(247, 127, 0, 0.15) 100%)',
-                border: '2px solid #FCBF49',
-                boxShadow: isConnecting
-                  ? '0 8px 32px rgba(29, 185, 84, 0.5)'
-                  : '0 8px 24px rgba(252, 191, 73, 0.3)',
-                width: '140px',
-                height: '140px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-            >
-              <Music className="w-16 h-16" style={{ color: '#FCBF49' }} />
-            </div>
-          </motion.div>
-        ) : (
-          <motion.div
-            className="mb-12"
-            initial={{ scale: 0, rotate: -180 }}
-            animate={{ scale: 1, rotate: 0 }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
-          >
-            <div
-              className="rounded-full p-8 relative"
-              style={{
-                background: 'linear-gradient(135deg, #1DB954 0%, #1ed760 100%)',
-                boxShadow: '0 8px 32px rgba(29, 185, 84, 0.6)',
-                width: '140px',
-                height: '140px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-            >
-              <Music className="w-16 h-16 text-white" />
-
-              {/* Check mark overlay */}
-              <motion.div
-                className="absolute -bottom-2 -right-2 rounded-full p-2"
-                style={{
-                  background: '#FCBF49',
-                  boxShadow: '0 4px 16px rgba(252, 191, 73, 0.6)'
-                }}
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ delay: 0.4, duration: 0.3 }}
-              >
-                <Check className="w-6 h-6 text-white" strokeWidth={3} />
-              </motion.div>
-            </div>
-          </motion.div>
-        )}
+            <Music className="w-16 h-16" style={{ color: '#FCBF49' }} />
+          </div>
+        </motion.div>
 
         {/* Connect Button */}
-        {!isConnected && (
-          <motion.button
+        <motion.button
             onClick={handleConnect}
             disabled={isConnecting}
             className="w-full max-w-sm rounded-2xl py-4 flex items-center justify-center gap-3"
@@ -242,43 +183,9 @@ export function SpotifyConnect({ onConnected, onBack, onSkip }: SpotifyConnectPr
               </>
             )}
           </motion.button>
-        )}
-
-        {/* Success Message */}
-        {isConnected && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3, duration: 0.5 }}
-            className="text-center"
-          >
-            <h2
-              style={{
-                fontFamily: 'Poppins, sans-serif',
-                fontWeight: 700,
-                fontSize: '24px',
-                color: '#EAE2B7',
-                textShadow: '0 2px 8px rgba(252, 191, 73, 0.4)',
-                marginBottom: '8px'
-              }}
-            >
-              connected successfully
-            </h2>
-            <p
-              style={{
-                fontFamily: 'Poppins, sans-serif',
-                fontSize: '14px',
-                color: '#EAE2B7',
-                opacity: 0.8
-              }}
-            >
-              your spotify account is now linked
-            </p>
-          </motion.div>
-        )}
 
         {/* Benefits Section */}
-        {!isConnected && (
+        {!error && (
           <motion.div
             className="mt-12 w-full max-w-sm"
             initial={{ opacity: 0, y: 20 }}
@@ -305,10 +212,10 @@ export function SpotifyConnect({ onConnected, onBack, onSkip }: SpotifyConnectPr
               </h3>
               <ul className="space-y-2" style={{ listStyle: 'none', padding: 0 }}>
                 {[
-                  'access to your saved tracks',
+                  'play music directly on Spotify',
                   'personalized recommendations',
-                  'sync across devices',
-                  'create custom playlists'
+                  'control playback from the app',
+                  'seamless workout experience'
                 ].map((benefit, index) => (
                   <li
                     key={index}
@@ -327,6 +234,60 @@ export function SpotifyConnect({ onConnected, onBack, onSkip }: SpotifyConnectPr
                   </li>
                 ))}
               </ul>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Error Message */}
+        {error && (
+          <motion.div
+            className="mt-8 w-full max-w-sm"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div
+              className="rounded-2xl p-4 flex items-start gap-3"
+              style={{
+                backgroundColor: 'rgba(214, 40, 40, 0.2)',
+                border: '1px solid rgba(214, 40, 40, 0.4)'
+              }}
+            >
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: '#D62828' }} />
+              <div>
+                <p
+                  style={{
+                    fontFamily: 'Poppins, sans-serif',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    color: '#EAE2B7',
+                    marginBottom: '4px'
+                  }}
+                >
+                  Connection failed
+                </p>
+                <p
+                  style={{
+                    fontFamily: 'Poppins, sans-serif',
+                    fontSize: '12px',
+                    color: '#EAE2B7',
+                    opacity: 0.8
+                  }}
+                >
+                  {error}
+                </p>
+                <button
+                  onClick={() => setError(null)}
+                  style={{
+                    fontFamily: 'Poppins, sans-serif',
+                    fontSize: '12px',
+                    color: '#FCBF49',
+                    marginTop: '8px',
+                    textDecoration: 'underline'
+                  }}
+                >
+                  Try again
+                </button>
+              </div>
             </div>
           </motion.div>
         )}
