@@ -1,13 +1,15 @@
 import { motion } from 'motion/react';
-import { ChevronLeft, Play, Music, SkipForward } from 'lucide-react';
+import { ChevronLeft, Play, Pause, Music, SkipForward } from 'lucide-react';
 import { VibeType } from '../App';
-import { useState, useEffect, useCallback } from 'react';
-import { getClusterTracks, getTrackDetails, getTracksFromTrack, startPlayback, Track } from '../utils/api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { getClusterTracks, getTracksFromTrack, startPlayback, Track } from '../utils/api';
+import { useSpotifyPlayer } from '../hooks/useSpotifyPlayer';
 
 interface VibeDetailProps {
   vibe: VibeType;
   bpm?: number;
   onBack: () => void;
+  isPremium?: boolean;
 }
 
 function toUri(t: Track): string {
@@ -15,61 +17,113 @@ function toUri(t: Track): string {
   return id?.startsWith('spotify:') ? id : `spotify:track:${id}`;
 }
 
-function mergeWithDetails(knnTracks: Track[], details: Track[]): Track[] {
-  return knnTracks.map(knn => {
-    const spotify = details.find(
-      s => (s.id ?? s.track_id) === (knn.id ?? knn.track_id)
-    );
-    return { ...knn, ...spotify, rank: knn.rank, distance: knn.distance, tempo: knn.tempo };
-  });
-}
-
-export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
+export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeDetailProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [nowPlayingIndex, setNowPlayingIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const clusterId = parseInt(vibe.id.split('-')[1] || '0');
+  const tracksRef = useRef<Track[]>([]);
+  const nowPlayingIndexRef = useRef(0);
 
+  // Keep refs in sync for use in callbacks
+  useEffect(() => { tracksRef.current = tracks; }, [tracks]);
+  useEffect(() => { nowPlayingIndexRef.current = nowPlayingIndex; }, [nowPlayingIndex]);
+
+  // Auto-advance handler for SDK player
+  const handleAutoAdvance = useCallback(() => {
+    const currentIdx = nowPlayingIndexRef.current;
+    const currentTracks = tracksRef.current;
+    const nextIdx = currentIdx + 1;
+    if (nextIdx >= currentTracks.length) return;
+
+    const next = currentTracks[nextIdx];
+    setNowPlayingIndex(nextIdx);
+
+    // Extend queue with KNN recommendations
+    const tid = next.track_id ?? next.id;
+    if (tid) {
+      getTracksFromTrack(tid, clusterId, 10).then(from => {
+        if (!from?.tracks?.length) return;
+        const add = from.tracks.filter(m => (m.track_id ?? m.id) !== tid);
+        setTracks(prev => {
+          const rest = prev.slice(nextIdx + 1);
+          const seen = new Set(rest.map(t => t.track_id ?? t.id));
+          const extra = add.filter(m => !seen.has(m.track_id ?? m.id));
+          return [...prev.slice(0, nextIdx + 1), ...extra, ...rest];
+        });
+      });
+    }
+  }, [clusterId]);
+
+  // SDK player for in-browser playback
+  const sdkPlayer = useSpotifyPlayer({
+    crossfadeDuration: 5000,
+    onTrackEnd: handleAutoAdvance,
+  });
+
+  const useSDK = isPremium && sdkPlayer.isReady;
+
+  // Crossfade to next track when auto-advance changes index (SDK mode)
+  const prevAutoIndexRef = useRef(-1);
+  useEffect(() => {
+    const prev = prevAutoIndexRef.current;
+    prevAutoIndexRef.current = nowPlayingIndex;
+
+    // Only crossfade on auto-advance (index incremented by 1)
+    if (useSDK && nowPlayingIndex >= 0 && prev >= 0 && nowPlayingIndex === prev + 1) {
+      const track = tracks[nowPlayingIndex];
+      if (track) {
+        sdkPlayer.crossfadeTo(toUri(track));
+      }
+    }
+  }, [nowPlayingIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Play a track by index
   const playTrack = useCallback(async (index: number) => {
     const t = tracks[index];
     if (!t) return;
-    const res = await startPlayback([toUri(t)]);
-    if (!res.success) console.warn('startPlayback failed:', res.error);
-  }, [tracks]);
+    if (useSDK) {
+      await sdkPlayer.skipTo(toUri(t));
+    } else {
+      const res = await startPlayback([toUri(t)]);
+      if (!res.success) console.warn('startPlayback failed:', res.error);
+    }
+  }, [tracks, useSDK, sdkPlayer]);
 
+  // Initial data fetch and first track playback
+  const initialPlayDone = useRef(false);
   useEffect(() => {
     let cancelled = false;
+    initialPlayDone.current = false;
 
     const run = async () => {
       setIsLoading(true);
       setError(null);
       try {
-        // Limit to 20 tracks per cluster to avoid Spotify API rate limits
         const clusterData = await getClusterTracks(clusterId, bpm, 20);
         if (!clusterData?.tracks?.length) {
           setError('No tracks found for this cluster. Try another vibe.');
           return;
         }
-        // Tracks already include name and artists from dataset, no need for getTrackDetails
         const allClusterTracks = clusterData.tracks;
-
         if (cancelled) return;
 
-        // Pick a random track to start playing
         const randomIdx = Math.floor(Math.random() * allClusterTracks.length);
         const randomTrack = allClusterTracks[randomIdx];
-        const tid = randomTrack.track_id ?? randomTrack.id;
-        if (tid) await startPlayback([toUri(randomTrack)]);
+        const otherTracks = allClusterTracks.filter((_, idx) => idx !== randomIdx);
+        const ordered = [randomTrack, ...otherTracks];
 
-        // Use all cluster tracks, but put the random track first
-        // Remove the random track from its original position and put it at the start
-        const otherTracks = allClusterTracks.filter(
-          (t, idx) => idx !== randomIdx
-        );
-        setTracks([randomTrack, ...otherTracks]);
+        setTracks(ordered);
+        tracksRef.current = ordered;
         setNowPlayingIndex(0);
+        nowPlayingIndexRef.current = 0;
+
+        // Start playback after state is set
+        if (!cancelled) {
+          initialPlayDone.current = true;
+        }
       } catch (err) {
         if (!cancelled) {
           console.error('VibeDetail fetch error:', err);
@@ -84,17 +138,39 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     return () => { cancelled = true; };
   }, [clusterId, bpm]);
 
+  // Start playback once SDK is ready and tracks are loaded
+  useEffect(() => {
+    if (!initialPlayDone.current || tracks.length === 0) return;
+    const firstTrack = tracks[0];
+    if (!firstTrack) return;
+
+    if (useSDK) {
+      sdkPlayer.play(toUri(firstTrack));
+    } else {
+      startPlayback([toUri(firstTrack)]);
+    }
+    initialPlayDone.current = false; // Only play once
+  }, [useSDK, tracks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup SDK on unmount
+  useEffect(() => {
+    return () => { sdkPlayer.cleanup(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleNext = async () => {
     const nextIdx = nowPlayingIndex + 1;
     if (nextIdx >= tracks.length) return;
     const next = tracks[nextIdx];
-    const tid = next.track_id ?? next.id;
+
+    // Manual skip — instant switch
     await playTrack(nextIdx);
     setNowPlayingIndex(nextIdx);
+
+    // Extend queue with KNN recommendations
+    const tid = next.track_id ?? next.id;
     if (!tid) return;
     const from = await getTracksFromTrack(tid, clusterId, 10);
     if (!from?.tracks?.length) return;
-    // Tracks already include metadata, no need for getTrackDetails
     const add = from.tracks.filter(m => (m.track_id ?? m.id) !== tid);
     setTracks(prev => {
       const rest = prev.slice(nextIdx + 1);
@@ -104,6 +180,32 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     });
   };
 
+  const handlePlayPause = async (track: Track, index: number) => {
+    if (!useSDK) {
+      // Non-SDK: same behavior as before
+      const ok = await startPlayback([toUri(track)]);
+      if (ok.success) {
+        setNowPlayingIndex(index);
+        return;
+      }
+      if (track.preview_url) window.open(track.preview_url, '_blank');
+      else if (track.external_urls) window.open(track.external_urls, '_blank');
+      return;
+    }
+
+    // SDK mode: play/pause toggle
+    if (index === nowPlayingIndex) {
+      if (sdkPlayer.isPlaying) {
+        sdkPlayer.pause();
+      } else {
+        sdkPlayer.resume();
+      }
+    } else {
+      await sdkPlayer.skipTo(toUri(track));
+      setNowPlayingIndex(index);
+    }
+  };
+
   const formatDuration = (ms?: number): string => {
     if (!ms) return '0:00';
     const seconds = Math.floor(ms / 1000);
@@ -111,6 +213,14 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     const remainingSeconds = seconds % 60;
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
+
+  const formatTime = (sec: number): string => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const nowPlaying = tracks[nowPlayingIndex];
 
   return (
     <div className="relative w-full h-full overflow-auto" style={{ fontFamily: 'Poppins, sans-serif' }}>
@@ -177,6 +287,77 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
           </motion.div>
         </div>
 
+        {/* Now Playing Bar (SDK mode) */}
+        {useSDK && nowPlaying && !isLoading && (
+          <div className="px-6 pb-4">
+            <div
+              className="rounded-xl p-3 flex items-center justify-between"
+              style={{
+                backgroundColor: 'rgba(252, 191, 73, 0.15)',
+                border: '1px solid rgba(252, 191, 73, 0.3)',
+              }}
+            >
+              <div className="flex-1 min-w-0">
+                <p style={{ fontSize: '12px', color: '#FCBF49', opacity: 0.8 }}>
+                  {sdkPlayer.isCrossfading ? 'Crossfading...' : 'Now Playing'}
+                </p>
+                <p
+                  className="truncate"
+                  style={{ fontSize: '14px', color: '#EAE2B7', fontWeight: 600 }}
+                >
+                  {nowPlaying.name}
+                </p>
+                {/* Progress bar */}
+                {sdkPlayer.duration > 0 && (
+                  <div className="mt-2">
+                    <div
+                      className="h-1 rounded-full overflow-hidden"
+                      style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}
+                    >
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${(sdkPlayer.currentTime / sdkPlayer.duration) * 100}%`,
+                          backgroundColor: '#FCBF49'
+                        }}
+                      />
+                    </div>
+                    <div className="flex justify-between mt-1">
+                      <span style={{ fontSize: '10px', color: '#EAE2B7', opacity: 0.6 }}>
+                        {formatTime(sdkPlayer.currentTime)}
+                      </span>
+                      <span style={{ fontSize: '10px', color: '#EAE2B7', opacity: 0.6 }}>
+                        {formatTime(sdkPlayer.duration)}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Play/Pause */}
+              <motion.button
+                onClick={() => {
+                  if (sdkPlayer.isPlaying) sdkPlayer.pause();
+                  else sdkPlayer.resume();
+                }}
+                className="ml-3 p-3 rounded-full"
+                style={{
+                  backgroundColor: 'rgba(252, 191, 73, 0.3)',
+                  color: '#FCBF49'
+                }}
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+              >
+                {sdkPlayer.isPlaying ? (
+                  <Pause className="w-5 h-5" />
+                ) : (
+                  <Play className="w-5 h-5" />
+                )}
+              </motion.button>
+            </div>
+          </div>
+        )}
+
         {/* Loading State */}
         {isLoading && (
           <div className="px-6 pb-6 flex flex-col items-center justify-center" style={{ minHeight: '300px' }}>
@@ -195,7 +376,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
               color: '#EAE2B7',
               opacity: 0.8
             }}>
-              loading your queue...
+              {isPremium && !sdkPlayer.isReady ? 'Connecting to Spotify...' : 'loading your queue...'}
             </p>
           </div>
         )}
@@ -217,6 +398,23 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
                 textAlign: 'center'
               }}>
                 {error}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* SDK Error Notice */}
+        {isPremium && sdkPlayer.sdkError && !isLoading && (
+          <div className="px-6 pb-3">
+            <div
+              className="rounded-lg p-2"
+              style={{
+                backgroundColor: 'rgba(247, 127, 0, 0.2)',
+                border: '1px solid rgba(247, 127, 0, 0.4)'
+              }}
+            >
+              <p style={{ fontSize: '11px', color: '#F77F00', textAlign: 'center' }}>
+                SDK: {sdkPlayer.sdkError} — using remote playback
               </p>
             </div>
           </div>
@@ -258,8 +456,12 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
                   key={track.track_id || track.id || index}
                   className="rounded-xl p-4 flex items-center gap-3"
                   style={{
-                    backgroundColor: 'rgba(0, 48, 73, 0.6)',
-                    border: '1px solid rgba(252, 191, 73, 0.2)',
+                    backgroundColor: index === nowPlayingIndex
+                      ? 'rgba(252, 191, 73, 0.2)'
+                      : 'rgba(0, 48, 73, 0.6)',
+                    border: index === nowPlayingIndex
+                      ? '1px solid rgba(252, 191, 73, 0.5)'
+                      : '1px solid rgba(252, 191, 73, 0.2)',
                   }}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -354,21 +556,24 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
                     </span>
                   )}
 
-                  {/* Play / Open */}
-                  <button
+                  {/* Play / Pause */}
+                  <motion.button
                     className="rounded-full p-2 flex-shrink-0 transition-all"
                     style={{
-                      background: 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)',
+                      background: index === nowPlayingIndex && useSDK && sdkPlayer.isPlaying
+                        ? 'linear-gradient(135deg, #F77F00 0%, #D62828 100%)'
+                        : 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)',
                     }}
-                    onClick={async () => {
-                      const ok = await startPlayback([toUri(track)]);
-                      if (ok.success) return;
-                      if (track.preview_url) window.open(track.preview_url, '_blank');
-                      else if (track.external_urls) window.open(track.external_urls, '_blank');
-                    }}
+                    onClick={() => handlePlayPause(track, index)}
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}
                   >
-                    <Play className="w-4 h-4 text-white fill-white" />
-                  </button>
+                    {index === nowPlayingIndex && useSDK && sdkPlayer.isPlaying ? (
+                      <Pause className="w-4 h-4 text-white fill-white" />
+                    ) : (
+                      <Play className="w-4 h-4 text-white fill-white" />
+                    )}
+                  </motion.button>
                 </motion.div>
               ))}
             </div>

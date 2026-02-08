@@ -155,6 +155,36 @@ export async function logoutSpotify(): Promise<boolean> {
 }
 
 /**
+ * Response from /api/spotify/token
+ */
+export interface SpotifyTokenResponse {
+  success: boolean;
+  access_token?: string;
+  expires_in?: number;
+  error?: string;
+}
+
+/**
+ * Get a fresh Spotify access token for the Web Playback SDK.
+ * The backend handles token refresh automatically.
+ */
+export async function getSpotifyToken(): Promise<SpotifyTokenResponse> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/spotify/token`);
+    const data = await response.json();
+    return {
+      success: data.success || false,
+      access_token: data.access_token,
+      expires_in: data.expires_in,
+      error: data.error,
+    };
+  } catch (error) {
+    console.error('Failed to get Spotify token:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+/**
  * Run clustering on user's tracks using recs model
  * @param paceValue - Pace value (e.g., 10.0 for 10:00 min/mile)
  * @param paceUnit - Pace unit ('min/mile' or 'min/km')

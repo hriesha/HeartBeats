@@ -51,7 +51,7 @@ class SpotifyIntegration:
     # user-read-private: Access user's email and subscription info
     # user-read-playback-state: Read user's playback state
     # user-modify-playback-state: Control playback (play, pause, skip)
-    DEFAULT_SCOPES = "user-library-read user-read-private user-read-playback-state user-modify-playback-state"
+    DEFAULT_SCOPES = "user-library-read user-read-private user-read-playback-state user-modify-playback-state streaming"
 
     def __init__(
         self,

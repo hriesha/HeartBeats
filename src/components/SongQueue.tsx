@@ -1,59 +1,72 @@
 import React, { useCallback } from 'react';
 import { motion } from 'motion/react';
 import { Play, Pause, Music, ExternalLink, SkipForward } from 'lucide-react';
-import { Track } from '../services/heartbeatsApi';
+import { Track } from '../utils/api';
 import { useCrossfade } from '../hooks/useCrossfade';
+import { useSpotifyPlayer } from '../hooks/useSpotifyPlayer';
 
 interface SongQueueProps {
   tracks: Track[];
   clusterId: number;
   bpm: number;
   onBack: () => void;
+  isPremium?: boolean;
 }
 
-export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
+function toUri(track: Track): string {
+  const id = track.id ?? track.track_id;
+  return id?.startsWith('spotify:') ? id : `spotify:track:${id}`;
+}
+
+export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }: SongQueueProps) {
   const [currentTrackIndex, setCurrentTrackIndex] = React.useState<number>(-1);
 
-  // Get the current track based on index
   const currentTrack = currentTrackIndex >= 0 ? tracks[currentTrackIndex] : null;
   const playingTrackId = currentTrack?.track_id || null;
 
-  // Handle track end - crossfade to next track
+  // Handle track end - advance to next track
   const handleTrackEnd = useCallback(() => {
     setCurrentTrackIndex((prevIndex) => {
       const nextIndex = prevIndex + 1;
-      if (nextIndex < tracks.length && tracks[nextIndex]?.preview_url) {
-        // Will trigger crossfade via useEffect below
-        return nextIndex;
+      if (nextIndex < tracks.length) {
+        // SDK can play any track; preview mode needs preview_url
+        if (isPremium || tracks[nextIndex]?.preview_url) {
+          return nextIndex;
+        }
       }
-      // No more tracks with preview URLs
       return -1;
     });
-  }, [tracks]);
+  }, [tracks, isPremium]);
 
-  // Initialize crossfade hook
-  const {
-    play,
-    pause,
-    resume,
-    skipTo,
-    crossfadeTo,
-    isPlaying,
-    isCrossfading,
-    currentTime,
-    duration,
-    cleanup,
-  } = useCrossfade({
-    crossfadeDuration: 5000, // 5 second crossfade
-    onTrackEnd: handleTrackEnd,
+  // SDK player for Premium users
+  const sdkPlayer = useSpotifyPlayer({
+    crossfadeDuration: 5000,
+    onTrackEnd: isPremium ? handleTrackEnd : undefined,
   });
+
+  // Preview player for free-tier users
+  const previewPlayer = useCrossfade({
+    crossfadeDuration: 5000,
+    onTrackEnd: !isPremium ? handleTrackEnd : undefined,
+  });
+
+  // Pick active player based on Premium status + SDK readiness
+  const useSDK = isPremium && sdkPlayer.isReady;
+  const player = useSDK ? sdkPlayer : previewPlayer;
+
+  // Get the playback target for a track (URI for SDK, preview URL for free tier)
+  const getPlaybackTarget = (track: Track): string | null => {
+    if (useSDK) return toUri(track);
+    return track.preview_url || null;
+  };
 
   // Cleanup on unmount
   React.useEffect(() => {
     return () => {
-      cleanup();
+      sdkPlayer.cleanup();
+      previewPlayer.cleanup();
     };
-  }, [cleanup]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle crossfade when track index changes due to auto-advance
   const prevIndexRef = React.useRef<number>(-1);
@@ -65,28 +78,29 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
     if (
       currentTrackIndex >= 0 &&
       prevIndex >= 0 &&
-      currentTrackIndex === prevIndex + 1 &&
-      tracks[currentTrackIndex]?.preview_url
+      currentTrackIndex === prevIndex + 1
     ) {
-      crossfadeTo(tracks[currentTrackIndex].preview_url!);
+      const target = getPlaybackTarget(tracks[currentTrackIndex]);
+      if (target) player.crossfadeTo(target);
     }
-  }, [currentTrackIndex, tracks, crossfadeTo]);
+  }, [currentTrackIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePlayPause = (track: Track, index: number) => {
     if (playingTrackId === track.track_id) {
       // Pause/resume current track
-      if (isPlaying) {
-        pause();
+      if (player.isPlaying) {
+        player.pause();
       } else {
-        resume();
+        player.resume();
       }
     } else {
       // Play different track - instant skip (no crossfade)
-      if (track.preview_url) {
-        skipTo(track.preview_url).then(() => {
+      const target = getPlaybackTarget(track);
+      if (target) {
+        player.skipTo(target).then(() => {
           setCurrentTrackIndex(index);
         }).catch((err) => {
-          console.error('Error playing preview:', err);
+          console.error('Error playing track:', err);
         });
       }
     }
@@ -94,13 +108,16 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
 
   const handleSkipNext = () => {
     const nextIndex = currentTrackIndex + 1;
-    if (nextIndex < tracks.length && tracks[nextIndex]?.preview_url) {
-      // Manual skip - instant switch, no crossfade
-      skipTo(tracks[nextIndex].preview_url!).then(() => {
-        setCurrentTrackIndex(nextIndex);
-      }).catch((err) => {
-        console.error('Error skipping to next:', err);
-      });
+    if (nextIndex < tracks.length) {
+      const target = getPlaybackTarget(tracks[nextIndex]);
+      if (target) {
+        // Manual skip - instant switch, no crossfade
+        player.skipTo(target).then(() => {
+          setCurrentTrackIndex(nextIndex);
+        }).catch((err) => {
+          console.error('Error skipping to next:', err);
+        });
+      }
     }
   };
 
@@ -112,16 +129,22 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
+  // Check if a track is playable (SDK can play all, preview needs preview_url)
+  const isPlayable = (track: Track): boolean => {
+    if (useSDK) return true;
+    return !!track.preview_url;
+  };
+
   return (
     <div className="relative w-full h-full overflow-auto" style={{ fontFamily: 'Poppins, sans-serif' }}>
       {/* Background with gradient overlay */}
-      <div 
+      <div
         className="absolute inset-0 z-0"
         style={{
           background: `linear-gradient(180deg, #003049 0%, #D62828 50%, #003049 100%)`
         }}
       />
-      
+
       {/* Content */}
       <div className="relative z-10 w-full h-full flex flex-col px-6 py-8">
         {/* Header */}
@@ -136,8 +159,8 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
           >
             ← Back
           </button>
-          
-          <h1 
+
+          <h1
             className="mb-2"
             style={{
               fontFamily: 'Poppins, sans-serif',
@@ -158,6 +181,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
             }}
           >
             Cluster {clusterId} • {bpm} BPM • {tracks.length} songs
+            {useSDK && ' • Full tracks'}
           </p>
 
           {/* Now Playing & Skip Controls */}
@@ -171,7 +195,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
             >
               <div className="flex-1 min-w-0">
                 <p style={{ fontSize: '12px', color: '#FCBF49', opacity: 0.8 }}>
-                  {isCrossfading ? 'Crossfading to...' : 'Now Playing'}
+                  {player.isCrossfading ? 'Crossfading to...' : 'Now Playing'}
                 </p>
                 <p
                   className="truncate"
@@ -180,7 +204,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                   {currentTrack.name}
                 </p>
                 {/* Progress bar */}
-                {duration > 0 && (
+                {player.duration > 0 && (
                   <div
                     className="mt-2 h-1 rounded-full overflow-hidden"
                     style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}
@@ -188,7 +212,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                     <div
                       className="h-full rounded-full transition-all"
                       style={{
-                        width: `${(currentTime / duration) * 100}%`,
+                        width: `${(player.currentTime / player.duration) * 100}%`,
                         backgroundColor: '#FCBF49'
                       }}
                     />
@@ -242,8 +266,8 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                 {/* Album Art */}
                 <div className="flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex items-center justify-center">
                   {track.images && track.images.length > 0 ? (
-                    <img 
-                      src={track.images[track.images.length - 1].url} 
+                    <img
+                      src={track.images[track.images.length - 1].url}
                       alt={track.album || track.name}
                       className="w-full h-full object-cover"
                     />
@@ -254,7 +278,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
 
                 {/* Track Info */}
                 <div className="flex-1 min-w-0">
-                  <h3 
+                  <h3
                     className="truncate mb-1"
                     style={{
                       fontFamily: 'Poppins, sans-serif',
@@ -265,7 +289,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                   >
                     {track.name}
                   </h3>
-                  <p 
+                  <p
                     className="truncate mb-1"
                     style={{
                       fontFamily: 'Poppins, sans-serif',
@@ -287,7 +311,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
 
                 {/* Actions */}
                 <div className="flex items-center gap-2">
-                  {track.preview_url && (
+                  {isPlayable(track) && (
                     <motion.button
                       onClick={() => handlePlayPause(track, index)}
                       className="p-3 rounded-full"
@@ -298,7 +322,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
                     >
-                      {playingTrackId === track.track_id && isPlaying ? (
+                      {playingTrackId === track.track_id && player.isPlaying ? (
                         <Pause className="w-5 h-5" />
                       ) : (
                         <Play className="w-5 h-5" />

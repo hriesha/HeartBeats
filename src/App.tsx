@@ -26,6 +26,7 @@ export default function App() {
   const [paceUnit, setPaceUnit] = useState<'min/mile' | 'min/km'>('min/mile');
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
   const [spotifyUser, setSpotifyUser] = useState<SpotifyUser | null>(null);
+  const isPremium = spotifyUser?.product === 'premium';
 
   // On mount: Check if user is already authenticated with Spotify
   useEffect(() => {
@@ -162,7 +163,7 @@ export default function App() {
         {currentScreen === 'bpm' && <PaceSelection onSubmit={handlePaceSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}
         {currentScreen === 'vibe' && <VibeSelection paceValue={paceValue} paceUnit={paceUnit} bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
-        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} />}
+        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} isPremium={isPremium} />}
         {currentScreen === 'trackerConnected' && <TrackerConnected onComplete={handleTrackerConnected} />}
       </PhoneFrame>
     </div>

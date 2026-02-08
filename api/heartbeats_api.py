@@ -728,6 +728,59 @@ def spotify_logout():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route('/api/spotify/token', methods=['GET'])
+def spotify_token():
+    """
+    Return the current Spotify access token for the Web Playback SDK.
+
+    The SDK needs a fresh access token to initialize the player.
+    This endpoint returns the token from the server-side cache,
+    refreshing it if expired.
+    """
+    global _spotify
+
+    if not SPOTIFY_AVAILABLE or SpotifyIntegration is None:
+        return jsonify({
+            "success": False,
+            "error": "Spotify integration not available"
+        }), 503
+
+    try:
+        if _spotify is None:
+            _spotify = SpotifyIntegration()
+
+        token_info = _spotify.auth_manager.get_cached_token()
+
+        if not token_info:
+            return jsonify({
+                "success": False,
+                "error": "No cached token. Please connect Spotify first."
+            }), 401
+
+        # Refresh if expired
+        if _spotify.auth_manager.is_token_expired(token_info):
+            log.info("Token expired, refreshing for SDK...")
+            token_info = _spotify.auth_manager.refresh_access_token(
+                token_info['refresh_token']
+            )
+
+        if not token_info or 'access_token' not in token_info:
+            return jsonify({
+                "success": False,
+                "error": "Failed to get valid token"
+            }), 401
+
+        import time as _time
+        return jsonify({
+            "success": True,
+            "access_token": token_info['access_token'],
+            "expires_in": token_info.get('expires_at', 0) - int(_time.time()),
+        })
+    except Exception as e:
+        log.error("Token endpoint failed: %r", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/recs/coverage', methods=['GET', 'POST'])
 def recs_coverage():
     """
