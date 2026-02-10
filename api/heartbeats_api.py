@@ -1382,9 +1382,9 @@ def get_clusters():
                 model_dir = Path(__file__).resolve().parent.parent / "recs" / "model"
                 dataset_path = model_dir / "test_set.csv"  # Use test_set.csv (has all tracks with metadata)
                 
-                # Fallback to original Kaggle dataset if test_set doesn't exist
+                # Fallback to demo_tracks.csv (real Spotify IDs with audio features)
                 if not dataset_path.exists():
-                    dataset_path = Path("/Users/saachidhamija/Downloads/spotify-kaggle-dataset.csv")
+                    dataset_path = Path(__file__).resolve().parent.parent / "demo_tracks.csv"
                     if not dataset_path.exists():
                         return jsonify({
                             "success": False,
