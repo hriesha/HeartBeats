@@ -68,13 +68,22 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Handle crossfade when track index changes due to auto-advance
+  // Track whether the index change was a manual action (click/skip button)
+  const isManualActionRef = React.useRef(false);
   const prevIndexRef = React.useRef<number>(-1);
+
+  // Handle crossfade ONLY for auto-advance (track ended), not manual clicks
   React.useEffect(() => {
     const prevIndex = prevIndexRef.current;
     prevIndexRef.current = currentTrackIndex;
 
-    // Only crossfade if this was an auto-advance (track ended)
+    // Manual actions (click, skip button) handle playback themselves — skip crossfade
+    if (isManualActionRef.current) {
+      isManualActionRef.current = false;
+      return;
+    }
+
+    // Auto-advance: crossfade to the next track
     if (
       currentTrackIndex >= 0 &&
       prevIndex >= 0 &&
@@ -94,12 +103,12 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
         player.resume();
       }
     } else {
-      // Play different track - instant skip (no crossfade)
+      // Play different track with crossfade
       const target = getPlaybackTarget(track);
       if (target) {
-        player.skipTo(target).then(() => {
-          setCurrentTrackIndex(index);
-        }).catch((err) => {
+        isManualActionRef.current = true;
+        setCurrentTrackIndex(index);
+        player.crossfadeTo(target).catch((err) => {
           console.error('Error playing track:', err);
         });
       }
@@ -111,10 +120,9 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
     if (nextIndex < tracks.length) {
       const target = getPlaybackTarget(tracks[nextIndex]);
       if (target) {
-        // Manual skip - instant switch, no crossfade
-        player.skipTo(target).then(() => {
-          setCurrentTrackIndex(nextIndex);
-        }).catch((err) => {
+        isManualActionRef.current = true;
+        setCurrentTrackIndex(nextIndex);
+        player.crossfadeTo(target).catch((err) => {
           console.error('Error skipping to next:', err);
         });
       }
@@ -301,7 +309,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
                     {track.artist_names || track.artists}
                   </p>
                   <div className="flex items-center gap-3 text-xs" style={{ color: '#FCBF49', opacity: 0.7 }}>
-                    <span>{Math.round(track.tempo)} BPM</span>
+                    <span>{Math.round(track.tempo ?? 0)} BPM</span>
                     <span>•</span>
                     <span>{formatDuration(track.duration_ms)}</span>
                     {track.rank && <span>•</span>}

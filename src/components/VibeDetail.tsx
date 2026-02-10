@@ -65,11 +65,20 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
 
   const useSDK = isPremium && sdkPlayer.isReady;
 
-  // Crossfade to next track when auto-advance changes index (SDK mode)
+  // Track whether the index change was a manual action (click/skip)
+  const isManualActionRef = useRef(false);
   const prevAutoIndexRef = useRef(-1);
+
+  // Crossfade to next track ONLY on auto-advance (track ended), not manual clicks
   useEffect(() => {
     const prev = prevAutoIndexRef.current;
     prevAutoIndexRef.current = nowPlayingIndex;
+
+    // Manual actions handle playback themselves — skip crossfade
+    if (isManualActionRef.current) {
+      isManualActionRef.current = false;
+      return;
+    }
 
     // Only crossfade on auto-advance (index incremented by 1)
     if (useSDK && nowPlayingIndex >= 0 && prev >= 0 && nowPlayingIndex === prev + 1) {
@@ -144,6 +153,9 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
     const firstTrack = tracks[0];
     if (!firstTrack) return;
 
+    // If Premium, wait for SDK to be ready — don't fall back to backend
+    if (isPremium && !sdkPlayer.isReady) return;
+
     if (useSDK) {
       sdkPlayer.play(toUri(firstTrack));
     } else {
@@ -162,9 +174,14 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
     if (nextIdx >= tracks.length) return;
     const next = tracks[nextIdx];
 
-    // Manual skip — instant switch
-    await playTrack(nextIdx);
+    // Manual skip with crossfade, prevent auto-advance double-trigger
+    isManualActionRef.current = true;
     setNowPlayingIndex(nextIdx);
+    if (useSDK) {
+      await sdkPlayer.crossfadeTo(toUri(next));
+    } else {
+      await playTrack(nextIdx);
+    }
 
     // Extend queue with KNN recommendations
     const tid = next.track_id ?? next.id;
@@ -201,8 +218,9 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
         sdkPlayer.resume();
       }
     } else {
-      await sdkPlayer.skipTo(toUri(track));
+      isManualActionRef.current = true;
       setNowPlayingIndex(index);
+      await sdkPlayer.crossfadeTo(toUri(track));
     }
   };
 
