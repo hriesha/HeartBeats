@@ -2,6 +2,10 @@
 .env
 *.env
 
+# Apple MusicKit private keys
+AuthKey_*.p8
+*.p8
+
 # Spotify OAuth cache
 .cache*
 .cache
