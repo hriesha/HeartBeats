@@ -129,6 +129,7 @@ _spotify: Optional[SpotifyIntegration] = None
 _spotify_cc = None  # spotipy client-credentials client
 _predicted_features_cache: Dict[str, dict] = {}  # track_id -> predicted audio features (for KNN)
 _dataset_metadata: Dict[str, Dict[str, Any]] = {}  # track_id -> {track_name, artists, album_name} from CSV
+_cluster_top_artists: Dict[int, List[str]] = {}  # cluster_id -> list of top artist names
 
 
 def _load_features_from_annas_archive(limit: int = ANNAS_DEFAULT_LIMIT) -> pd.DataFrame:
@@ -1340,7 +1341,7 @@ def get_clusters():
     n_clusters, csv_path, use_recs_model (optional). When use_recs_model=True: assign user's
     saved tracks to pre-trained recs clusters (no Anna's Archive needed). Returns cluster info.
     """
-    global _clustered_df, _kmeans_model, _gmm_model, _scaler, _cluster_method, _last_bpm
+    global _clustered_df, _kmeans_model, _gmm_model, _scaler, _cluster_method, _last_bpm, _cluster_top_artists
 
     try:
         data = request.get_json() or {}
@@ -1485,7 +1486,7 @@ def get_clusters():
                         log.warning(f"Cluster {cid} has only {count} tracks - may result in limited recommendations")
 
                 # Store for KNN later - store features + cluster assignments
-                global _clustered_df, _scaler, _dataset_metadata
+                global _clustered_df, _scaler, _dataset_metadata, _cluster_top_artists
                 _clustered_df = df_features.copy()  # Features + cluster for KNN
                 _scaler = scaler_filtered
                 _cluster_method = "kmeans"
@@ -1563,6 +1564,11 @@ def get_clusters():
                         name = f"Vibe {cid}"
                     
                     top_artists_map[cid] = top_artists if top_artists else [name]
+
+                # Store globally so get_cluster_tracks can use it
+                _cluster_top_artists.clear()
+                for cid_key, artists_list in top_artists_map.items():
+                    _cluster_top_artists[int(cid_key)] = artists_list
 
                 cluster_stats = []
                 for cid in sorted(by_cluster.keys()):
@@ -1649,6 +1655,12 @@ def get_clusters():
 
         # Top 2–3 artists per cluster (from cumulative % across tracks) for name/description
         top_artists_map = _top_artists_per_cluster(df_clustered, max_tracks_per_cluster=200, top_n=3)
+
+        # Store globally so get_cluster_tracks can use it
+        _cluster_top_artists.clear()
+        for cid_key, artists_list in top_artists_map.items():
+            _cluster_top_artists[int(cid_key)] = artists_list
+
         colors = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049", "#9B59B6", "#2ECC71", "#3498DB"]
 
         cluster_stats = []
@@ -1749,7 +1761,7 @@ def get_tracks():
     Get tracks for a given BPM and cluster using KNN.
     Body: bpm (or pace_value + pace_unit via recs), cluster_id (optional), topk, prob_threshold (GMM only).
     """
-    global _clustered_df, _scaler, _cluster_method
+    global _clustered_df, _scaler, _cluster_method, _cluster_top_artists
 
     try:
         data = request.get_json() or {}
@@ -1778,15 +1790,15 @@ def get_tracks():
         if df_candidates.empty:
             return jsonify({"success": False, "error": "No tracks found"}), 404
 
-        # If cluster has very few tracks (<= topk), return all tracks sorted by tempo similarity
-        # Otherwise use KNN to find best matches
-        if len(df_candidates) <= topk:
-            log.info(f"Cluster {cluster_id} has {len(df_candidates)} tracks (<= {topk}), returning all tracks")
-            # Sort by tempo similarity to target_bpm
+        # Fetch extra tracks so we can filter by BPM and inject artist tracks
+        fetch_topk = min(topk * 3, len(df_candidates))
+
+        # If cluster has very few tracks (<= fetch_topk), return all sorted by tempo
+        if len(df_candidates) <= fetch_topk:
+            log.info(f"Cluster {cluster_id} has {len(df_candidates)} tracks (<= {fetch_topk}), returning all tracks")
             df_candidates = df_candidates.copy()
             df_candidates["tempo_diff"] = (df_candidates["tempo"] - target_bpm).abs()
             picks = df_candidates.nsmallest(len(df_candidates), "tempo_diff")
-            # Add metadata and format
             picks_dict = picks.to_dict("records")
             formatted_picks = []
             for pick in picks_dict:
@@ -1810,11 +1822,98 @@ def get_tracks():
             picks = pd.DataFrame(formatted_picks)
         else:
             picks = _knn_on_df(
-                df_candidates, _scaler, target_bpm, topk, cluster_id_override=cluster_id
+                df_candidates, _scaler, target_bpm, fetch_topk, cluster_id_override=cluster_id
             )
-        log.info(f"Returning {len(picks)} tracks for cluster {cluster_id} (requested topk={topk})")
+
         if picks.empty:
             return jsonify({"success": False, "error": "No tracks found"}), 404
+
+        # --- BPM tightening: keep tracks within ±10 BPM of target ---
+        BPM_QUEUE_TOLERANCE = 10
+        bpm_filtered = picks[abs(picks["tempo"] - float(target_bpm)) <= BPM_QUEUE_TOLERANCE]
+        if len(bpm_filtered) < topk:
+            bpm_filtered = picks[abs(picks["tempo"] - float(target_bpm)) <= 15]
+        if len(bpm_filtered) < 3:
+            bpm_filtered = picks
+        picks = bpm_filtered.reset_index(drop=True)
+
+        # --- Guarantee top artists from cluster name appear in queue ---
+        top_artists = _cluster_top_artists.get(int(cluster_id), [])
+        if top_artists:
+            picks_artist_set = set()
+            for _, row in picks.iterrows():
+                row_artists_str = str(row.get("artists", ""))
+                if not row_artists_str:
+                    row_artists_str = _dataset_metadata.get(str(row["track_id"]), {}).get("artists", "")
+                for a in _parse_artists(str(row_artists_str)):
+                    picks_artist_set.add(a.lower())
+
+            missing_artists = [a for a in top_artists if a.lower() not in picks_artist_set]
+
+            if missing_artists:
+                artist_tracks = []
+                for _, cand_row in df_candidates.iterrows():
+                    tid = str(cand_row.get("track_id", ""))
+                    cand_artists_str = _dataset_metadata.get(tid, {}).get("artists", "")
+                    if not cand_artists_str:
+                        cand_artists_str = str(cand_row.get("artists", "")) if "artists" in cand_row.index else ""
+                    parsed = [a.lower() for a in _parse_artists(cand_artists_str)]
+                    for ma in missing_artists:
+                        if ma.lower() in parsed:
+                            track_tempo = float(cand_row.get("tempo", 0))
+                            if abs(track_tempo - float(target_bpm)) <= 15:
+                                artist_tracks.append(cand_row)
+                                break
+
+                if artist_tracks:
+                    existing_tids = set(picks["track_id"].astype(str).tolist())
+                    injected = []
+                    seen_artists = set()
+                    for cand_row in artist_tracks:
+                        tid = str(cand_row.get("track_id", ""))
+                        if tid in existing_tids:
+                            continue
+                        cand_artists_str = _dataset_metadata.get(tid, {}).get("artists", "")
+                        if not cand_artists_str:
+                            cand_artists_str = str(cand_row.get("artists", "")) if "artists" in cand_row.index else ""
+                        matched_artist = None
+                        for ma in missing_artists:
+                            if ma.lower() in [a.lower() for a in _parse_artists(cand_artists_str)] and ma.lower() not in seen_artists:
+                                matched_artist = ma
+                                break
+                        if not matched_artist:
+                            continue
+                        seen_artists.add(matched_artist.lower())
+                        existing_tids.add(tid)
+                        metadata = _dataset_metadata.get(tid, {})
+                        injected.append({
+                            "track_id": tid,
+                            "name": cand_row.get("name") or metadata.get("track_name", metadata.get("name", "")),
+                            "artists": cand_artists_str or metadata.get("artists", ""),
+                            "cluster": int(cluster_id),
+                            "tempo": float(cand_row["tempo"]),
+                            "energy": float(cand_row["energy"]),
+                            "danceability": float(cand_row["danceability"]),
+                            "valence": float(cand_row["valence"]),
+                            "loudness": float(cand_row["loudness"]),
+                            "distance": 0.0,
+                            "rank": 0,
+                        })
+                        if len(injected) >= len(missing_artists):
+                            break
+
+                    if injected:
+                        injected_df = pd.DataFrame(injected)
+                        top_part = picks.head(2)
+                        rest_part = picks.iloc[2:]
+                        picks = pd.concat([top_part, injected_df, rest_part], ignore_index=True)
+                        log.info(f"Injected {len(injected)} artist tracks for cluster {cluster_id}: {[r['artists'] for r in injected]}")
+
+        # Trim to requested topk and re-rank
+        picks = picks.head(topk).reset_index(drop=True)
+        picks["rank"] = range(1, len(picks) + 1)
+
+        log.info(f"Returning {len(picks)} tracks for cluster {cluster_id} (requested topk={topk})")
 
         tracks = picks.to_dict("records")
         return jsonify({
@@ -2041,7 +2140,7 @@ def get_cluster_tracks():
     Combined: Get tracks for BPM + cluster, then fetch full details.
     Body: bpm (or pace_value + pace_unit via recs), cluster_id (optional), topk, prob_threshold (GMM only).
     """
-    global _clustered_df, _scaler, _spotify, _cluster_method, _dataset_metadata
+    global _clustered_df, _scaler, _spotify, _cluster_method, _dataset_metadata, _cluster_top_artists
 
     try:
         data = request.get_json() or {}
@@ -2069,12 +2168,108 @@ def get_cluster_tracks():
         if df_candidates.empty:
             return jsonify({"success": False, "error": "No tracks found"}), 404
 
+        # Fetch more than needed so we can filter by BPM and inject artist tracks
+        fetch_topk = min(topk * 3, len(df_candidates))
         picks = _knn_on_df(
-            df_candidates, _scaler, target_bpm, topk, cluster_id_override=cluster_id
+            df_candidates, _scaler, target_bpm, fetch_topk, cluster_id_override=cluster_id
         )
 
         if picks.empty:
             return jsonify({"success": False, "error": "No tracks found"}), 404
+
+        # --- BPM tightening: keep tracks within ±10 BPM of target ---
+        BPM_QUEUE_TOLERANCE = 10
+        bpm_filtered = picks[abs(picks["tempo"] - float(target_bpm)) <= BPM_QUEUE_TOLERANCE]
+        # Fall back to ±15 if too few tracks
+        if len(bpm_filtered) < topk:
+            bpm_filtered = picks[abs(picks["tempo"] - float(target_bpm)) <= 15]
+        # Fall back to original picks if still too few
+        if len(bpm_filtered) < 3:
+            bpm_filtered = picks
+        picks = bpm_filtered.reset_index(drop=True)
+
+        # --- Guarantee top artists from cluster name appear in queue ---
+        top_artists = _cluster_top_artists.get(int(cluster_id), [])
+        if top_artists:
+            # Check which top artists are already represented
+            picks_artist_set = set()
+            for _, row in picks.iterrows():
+                row_artists_str = row.get("artists") or _dataset_metadata.get(str(row["track_id"]), {}).get("artists", "")
+                for a in _parse_artists(str(row_artists_str)):
+                    picks_artist_set.add(a.lower())
+
+            missing_artists = [a for a in top_artists if a.lower() not in picks_artist_set]
+
+            if missing_artists:
+                # Find tracks in the cluster by these artists
+                artist_tracks = []
+                for _, cand_row in df_candidates.iterrows():
+                    tid = str(cand_row.get("track_id", ""))
+                    cand_artists_str = _dataset_metadata.get(tid, {}).get("artists", "")
+                    if not cand_artists_str:
+                        cand_artists_str = str(cand_row.get("artists", "")) if "artists" in cand_row.index else ""
+                    parsed = [a.lower() for a in _parse_artists(cand_artists_str)]
+                    for ma in missing_artists:
+                        if ma.lower() in parsed:
+                            # Check BPM is reasonable (±15)
+                            track_tempo = float(cand_row.get("tempo", 0))
+                            if abs(track_tempo - float(target_bpm)) <= 15:
+                                artist_tracks.append(cand_row)
+                                break
+
+                if artist_tracks:
+                    # Build rows in the same schema as picks
+                    existing_tids = set(picks["track_id"].astype(str).tolist())
+                    injected = []
+                    seen_artists = set()
+                    for cand_row in artist_tracks:
+                        tid = str(cand_row.get("track_id", ""))
+                        if tid in existing_tids:
+                            continue
+                        cand_artists_str = _dataset_metadata.get(tid, {}).get("artists", "")
+                        if not cand_artists_str:
+                            cand_artists_str = str(cand_row.get("artists", "")) if "artists" in cand_row.index else ""
+                        # Only inject one track per missing artist
+                        matched_artist = None
+                        for ma in missing_artists:
+                            if ma.lower() in [a.lower() for a in _parse_artists(cand_artists_str)] and ma.lower() not in seen_artists:
+                                matched_artist = ma
+                                break
+                        if not matched_artist:
+                            continue
+                        seen_artists.add(matched_artist.lower())
+                        existing_tids.add(tid)
+                        metadata = _dataset_metadata.get(tid, {})
+                        injected.append({
+                            "track_id": tid,
+                            "name": cand_row.get("name") or metadata.get("track_name", metadata.get("name", "")),
+                            "artists": cand_artists_str or metadata.get("artists", ""),
+                            "cluster": int(cluster_id),
+                            "tempo": float(cand_row["tempo"]),
+                            "energy": float(cand_row["energy"]),
+                            "danceability": float(cand_row["danceability"]),
+                            "valence": float(cand_row["valence"]),
+                            "loudness": float(cand_row["loudness"]),
+                            "distance": 0.0,
+                            "rank": 0,
+                        })
+                        if len(injected) >= len(missing_artists):
+                            break
+
+                    if injected:
+                        injected_df = pd.DataFrame(injected)
+                        # Insert artist tracks near the top (after first 2 KNN picks)
+                        top_part = picks.head(2)
+                        rest_part = picks.iloc[2:]
+                        picks = pd.concat([top_part, injected_df, rest_part], ignore_index=True)
+                        log.info(f"Injected {len(injected)} artist tracks for cluster {cluster_id}: {[r['artists'] for r in injected]}")
+
+        # Trim to requested topk
+        picks = picks.head(topk)
+
+        # Re-assign ranks
+        picks = picks.reset_index(drop=True)
+        picks["rank"] = range(1, len(picks) + 1)
 
         # Get Spotify track details for playback (batch efficiently, max 50 per request)
         track_ids = picks["track_id"].tolist()
