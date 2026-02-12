@@ -1,6 +1,6 @@
 import React, { useCallback } from 'react';
 import { motion } from 'motion/react';
-import { Play, Pause, Music, ExternalLink, SkipForward } from 'lucide-react';
+import { Play, Pause, Music, ExternalLink, SkipForward, ChevronLeft } from 'lucide-react';
 import { Track } from '../utils/api';
 import { useCrossfade } from '../hooks/useCrossfade';
 import { useSpotifyPlayer } from '../hooks/useSpotifyPlayer';
@@ -144,196 +144,189 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
   };
 
   return (
-    <div className="relative w-full h-full overflow-auto" style={{ fontFamily: 'Poppins, sans-serif' }}>
-      {/* Background with gradient overlay */}
-      <div
-        className="absolute inset-0 z-0"
-        style={{
-          background: `linear-gradient(180deg, #003049 0%, #D62828 50%, #003049 100%)`
-        }}
-      />
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      {/* Header */}
+      <div style={{ padding: '24px', paddingBottom: 0 }}>
+        {/* Back Button */}
+        <button
+          onClick={onBack}
+          style={{
+            width: 40, height: 40, borderRadius: '50%',
+            background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)',
+            color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', marginBottom: 20,
+          }}
+        >
+          <ChevronLeft style={{ width: 20, height: 20 }} />
+        </button>
 
-      {/* Content */}
-      <div className="relative z-10 w-full h-full flex flex-col px-6 py-8">
-        {/* Header */}
-        <div className="mb-6">
-          <button
-            onClick={onBack}
-            className="mb-4 p-2 rounded-full transition-all"
-            style={{
-              backgroundColor: 'rgba(0, 48, 73, 0.8)',
-              color: '#FCBF49'
-            }}
-          >
-            ← Back
-          </button>
+        <h1 style={{
+          fontFamily: 'var(--font-heading)', fontWeight: 200, fontSize: '28px',
+          color: '#ffffff', letterSpacing: '0.1em', marginBottom: 8,
+        }}>
+          your queue
+        </h1>
+        <p style={{
+          fontFamily: 'var(--font-body)', fontSize: '13px', fontWeight: 300,
+          color: 'rgba(255, 255, 255, 0.35)',
+        }}>
+          cluster {clusterId} · {bpm} BPM · {tracks.length} songs
+          {useSDK && ' · full tracks'}
+        </p>
 
-          <h1
-            className="mb-2"
-            style={{
-              fontFamily: 'Poppins, sans-serif',
-              fontWeight: 700,
-              fontSize: '28px',
-              color: '#EAE2B7',
-              textShadow: '0 2px 8px rgba(252, 191, 73, 0.4)'
-            }}
-          >
-            Your Queue
-          </h1>
-          <p
-            style={{
-              fontFamily: 'Poppins, sans-serif',
-              fontSize: '14px',
-              color: '#FCBF49',
-              fontWeight: 500
-            }}
-          >
-            Cluster {clusterId} • {bpm} BPM • {tracks.length} songs
-            {useSDK && ' • Full tracks'}
-          </p>
-
-          {/* Now Playing & Skip Controls */}
-          {currentTrack && (
-            <div
-              className="mt-4 p-3 rounded-xl flex items-center justify-between"
-              style={{
-                backgroundColor: 'rgba(252, 191, 73, 0.15)',
-                border: '1px solid rgba(252, 191, 73, 0.3)',
-              }}
-            >
-              <div className="flex-1 min-w-0">
-                <p style={{ fontSize: '12px', color: '#FCBF49', opacity: 0.8 }}>
-                  {player.isCrossfading ? 'Crossfading to...' : 'Now Playing'}
-                </p>
-                <p
-                  className="truncate"
-                  style={{ fontSize: '14px', color: '#EAE2B7', fontWeight: 600 }}
-                >
-                  {currentTrack.name}
-                </p>
-                {/* Progress bar */}
-                {player.duration > 0 && (
-                  <div
-                    className="mt-2 h-1 rounded-full overflow-hidden"
-                    style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}
-                  >
-                    <div
-                      className="h-full rounded-full transition-all"
-                      style={{
-                        width: `${(player.currentTime / player.duration) * 100}%`,
-                        backgroundColor: '#FCBF49'
-                      }}
-                    />
+        {/* Now Playing & Skip Controls */}
+        {currentTrack && (
+          <div style={{
+            marginTop: 16, padding: '14px 16px', borderRadius: '14px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: 'rgba(255, 45, 85, 0.06)',
+            border: '1px solid rgba(255, 45, 85, 0.15)',
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: '#FF2D55', opacity: 0.8, fontWeight: 400 }}>
+                {player.isCrossfading ? 'crossfading...' : 'now playing'}
+              </p>
+              <p style={{
+                fontFamily: 'var(--font-body)', fontSize: '14px', color: '#ffffff', fontWeight: 500,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {currentTrack.name}
+              </p>
+              {/* Progress bar */}
+              {player.duration > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{
+                    height: 2, borderRadius: 1, overflow: 'hidden',
+                    background: 'rgba(255, 255, 255, 0.08)',
+                  }}>
+                    <div style={{
+                      height: '100%', borderRadius: 1, transition: 'width 0.3s',
+                      width: `${(player.currentTime / player.duration) * 100}%`,
+                      background: '#FF2D55',
+                    }} />
                   </div>
-                )}
-              </div>
-
-              {/* Skip Next Button */}
-              <motion.button
-                onClick={handleSkipNext}
-                disabled={currentTrackIndex >= tracks.length - 1}
-                className="ml-4 p-3 rounded-full disabled:opacity-40"
-                style={{
-                  backgroundColor: 'rgba(252, 191, 73, 0.3)',
-                  color: '#FCBF49'
-                }}
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-              >
-                <SkipForward className="w-5 h-5" />
-              </motion.button>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Song List */}
-        <div className="flex-1 overflow-auto space-y-3">
-          {tracks.length === 0 ? (
-            <div className="text-center py-12">
-              <Music className="w-16 h-16 mx-auto mb-4" style={{ color: '#EAE2B7', opacity: 0.5 }} />
-              <p style={{ color: '#EAE2B7', opacity: 0.7 }}>No tracks found</p>
-            </div>
-          ) : (
-            tracks.map((track, index) => (
+            {/* Skip Next Button */}
+            <motion.button
+              onClick={handleSkipNext}
+              disabled={currentTrackIndex >= tracks.length - 1}
+              style={{
+                marginLeft: 12, padding: 10, borderRadius: '50%', border: 'none',
+                background: 'rgba(255, 45, 85, 0.15)', color: '#FF2D55',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                opacity: currentTrackIndex >= tracks.length - 1 ? 0.4 : 1,
+              }}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+            >
+              <SkipForward style={{ width: 18, height: 18 }} />
+            </motion.button>
+          </div>
+        )}
+      </div>
+
+      {/* Song List */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {tracks.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '48px 0' }}>
+            <Music style={{ width: 48, height: 48, color: 'rgba(255, 45, 85, 0.2)', margin: '0 auto 16px' }} />
+            <p style={{ fontFamily: 'var(--font-body)', fontSize: '14px', color: 'rgba(255,255,255,0.35)', fontWeight: 300 }}>
+              no tracks found
+            </p>
+          </div>
+        ) : (
+          tracks.map((track, index) => {
+            const isNowPlaying = index === currentTrackIndex;
+            return (
               <motion.div
                 key={track.track_id}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
-                className="rounded-xl p-4 flex items-center gap-4"
+                transition={{ delay: index * 0.04 }}
                 style={{
-                  backgroundColor: index === currentTrackIndex
-                    ? 'rgba(252, 191, 73, 0.2)'
-                    : 'rgba(0, 48, 73, 0.6)',
-                  border: index === currentTrackIndex
-                    ? '1px solid rgba(252, 191, 73, 0.5)'
-                    : '1px solid rgba(252, 191, 73, 0.2)',
-                  backdropFilter: 'blur(10px)'
+                  borderRadius: '14px', padding: '14px 16px',
+                  display: 'flex', alignItems: 'center', gap: 14,
+                  background: isNowPlaying ? 'rgba(255, 45, 85, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+                  border: isNowPlaying ? '1px solid rgba(255, 45, 85, 0.2)' : '1px solid rgba(255, 255, 255, 0.06)',
                 }}
               >
                 {/* Album Art */}
-                <div className="flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex items-center justify-center">
+                <div style={{
+                  flexShrink: 0, width: 56, height: 56, borderRadius: '10px', overflow: 'hidden',
+                  background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.06)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
                   {track.images && track.images.length > 0 ? (
                     <img
                       src={track.images[track.images.length - 1].url}
                       alt={track.album || track.name}
-                      className="w-full h-full object-cover"
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                     />
                   ) : (
-                    <Music className="w-8 h-8" style={{ color: '#FCBF49', opacity: 0.5 }} />
+                    <Music style={{ width: 24, height: 24, color: 'rgba(255, 45, 85, 0.3)' }} />
                   )}
                 </div>
 
                 {/* Track Info */}
-                <div className="flex-1 min-w-0">
-                  <h3
-                    className="truncate mb-1"
-                    style={{
-                      fontFamily: 'Poppins, sans-serif',
-                      fontSize: '16px',
-                      fontWeight: 600,
-                      color: '#EAE2B7'
-                    }}
-                  >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h3 style={{
+                    fontFamily: 'var(--font-body)', fontSize: '15px', fontWeight: 500,
+                    color: '#ffffff', marginBottom: 2,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
                     {track.name}
                   </h3>
-                  <p
-                    className="truncate mb-1"
-                    style={{
-                      fontFamily: 'Poppins, sans-serif',
-                      fontSize: '14px',
-                      color: '#EAE2B7',
-                      opacity: 0.8
-                    }}
-                  >
+                  <p style={{
+                    fontFamily: 'var(--font-body)', fontSize: '13px', fontWeight: 300,
+                    color: 'rgba(255, 255, 255, 0.4)', marginBottom: 2,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
                     {track.artist_names || track.artists}
                   </p>
-                  <div className="flex items-center gap-3 text-xs" style={{ color: '#FCBF49', opacity: 0.7 }}>
-                    <span>{Math.round(track.tempo ?? 0)} BPM</span>
-                    <span>•</span>
-                    <span>{formatDuration(track.duration_ms)}</span>
-                    {track.rank && <span>•</span>}
-                    {track.rank && <span>#{track.rank}</span>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: '#FF2D55', opacity: 0.6, fontWeight: 400 }}>
+                      {Math.round(track.tempo ?? 0)} BPM
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: 'rgba(255,255,255,0.2)' }}>·</span>
+                    <span style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontWeight: 300 }}>
+                      {formatDuration(track.duration_ms)}
+                    </span>
+                    {track.rank && (
+                      <>
+                        <span style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: 'rgba(255,255,255,0.2)' }}>·</span>
+                        <span style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: '#FF2D55', opacity: 0.5, fontWeight: 400 }}>
+                          #{track.rank}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 
                 {/* Actions */}
-                <div className="flex items-center gap-2">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {isPlayable(track) && (
                     <motion.button
                       onClick={() => handlePlayPause(track, index)}
-                      className="p-3 rounded-full"
                       style={{
-                        backgroundColor: playingTrackId === track.track_id ? '#FCBF49' : 'rgba(252, 191, 73, 0.2)',
-                        color: playingTrackId === track.track_id ? '#03071E' : '#FCBF49'
+                        padding: 10, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: playingTrackId === track.track_id && player.isPlaying
+                          ? '#FF2D55'
+                          : 'rgba(255, 45, 85, 0.12)',
+                        color: playingTrackId === track.track_id && player.isPlaying
+                          ? '#ffffff'
+                          : '#FF2D55',
                       }}
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
                     >
                       {playingTrackId === track.track_id && player.isPlaying ? (
-                        <Pause className="w-5 h-5" />
+                        <Pause style={{ width: 16, height: 16 }} />
                       ) : (
-                        <Play className="w-5 h-5" />
+                        <Play style={{ width: 16, height: 16 }} />
                       )}
                     </motion.button>
                   )}
@@ -342,22 +335,22 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
                       href={track.external_urls}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="p-3 rounded-full"
                       style={{
-                        backgroundColor: 'rgba(252, 191, 73, 0.2)',
-                        color: '#FCBF49'
+                        padding: 10, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'rgba(255, 255, 255, 0.05)', color: 'rgba(255, 255, 255, 0.3)',
+                        textDecoration: 'none',
                       }}
-                      whileHover={{ scale: 1.1 }}
+                      whileHover={{ scale: 1.1, color: '#FF2D55' }}
                       whileTap={{ scale: 0.9 }}
                     >
-                      <ExternalLink className="w-5 h-5" />
+                      <ExternalLink style={{ width: 16, height: 16 }} />
                     </motion.a>
                   )}
                 </div>
               </motion.div>
-            ))
-          )}
-        </div>
+            );
+          })
+        )}
       </div>
     </div>
   );

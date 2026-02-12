@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { PhoneFrame } from './components/PhoneFrame';
+import { GlowingArcs } from './components/GlowingArcs';
+import { CursorTrail } from './components/CursorTrail';
 import { SpotifyConnect } from './components/SpotifyConnect';
 import { ControlOptions } from './components/ControlOptions';
 import { PaceSelection } from './components/PaceSelection';
@@ -147,14 +148,16 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-      <PhoneFrame>
+    <div style={{ minHeight: '100vh', background: '#0a0a0a', position: 'relative', overflow: 'hidden' }}>
+      <GlowingArcs />
+      <CursorTrail />
+      <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
         {/* Loading state while checking auth */}
         {currentScreen === 'loading' && (
-          <div className="w-full h-full flex items-center justify-center" style={{ background: 'linear-gradient(180deg, #003049 0%, #D62828 50%, #003049 100%)' }}>
+          <div className="w-full h-full flex items-center justify-center" style={{ minHeight: '100vh' }}>
             <div className="text-center">
-              <div className="w-12 h-12 border-4 border-[#FCBF49] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-              <p style={{ fontFamily: 'Poppins, sans-serif', color: '#EAE2B7', fontSize: '16px' }}>Loading...</p>
+              <div style={{ width: 40, height: 40, border: '2px solid #FF2D55', borderTopColor: 'transparent', borderRadius: '50%', margin: '0 auto 16px' }} className="animate-spin" />
+              <p style={{ fontFamily: 'var(--font-heading)', color: 'rgba(255,255,255,0.6)', fontSize: '14px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>Loading</p>
             </div>
           </div>
         )}
@@ -165,7 +168,7 @@ export default function App() {
         {currentScreen === 'vibe' && <VibeSelection paceValue={paceValue} paceUnit={paceUnit} bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
         {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} isPremium={isPremium} />}
         {currentScreen === 'trackerConnected' && <TrackerConnected onComplete={handleTrackerConnected} />}
-      </PhoneFrame>
+      </div>
     </div>
   );
 }

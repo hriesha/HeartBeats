@@ -241,319 +241,271 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
   const nowPlaying = tracks[nowPlayingIndex];
 
   return (
-    <div className="relative w-full h-full overflow-auto" style={{ fontFamily: 'Poppins, sans-serif' }}>
-      {/* Background with gradient overlay */}
-      <div
-        className="absolute inset-0 z-0"
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      {/* Back Button */}
+      <button
+        onClick={onBack}
         style={{
-          background: `linear-gradient(180deg, #003049 0%, #D62828 50%, #003049 100%)`
+          position: 'absolute', top: 20, left: 20, width: 40, height: 40, borderRadius: '50%',
+          background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)',
+          color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', zIndex: 20,
         }}
-      />
+      >
+        <ChevronLeft style={{ width: 20, height: 20 }} />
+      </button>
 
-      {/* Content */}
-      <div className="relative z-10 w-full h-full">
-        {/* Back Button */}
-        <button
-          onClick={onBack}
-          className="absolute top-4 left-4 p-2 rounded-full transition-all z-20"
+      {/* Vibe Header */}
+      <div style={{ paddingTop: 72, paddingBottom: 16, paddingLeft: 24, paddingRight: 24 }}>
+        <motion.div
           style={{
-            backgroundColor: 'rgba(0, 48, 73, 0.8)',
-            color: '#FCBF49'
+            borderRadius: '16px',
+            padding: '20px 24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            background: 'rgba(255, 45, 85, 0.08)',
+            border: '1px solid rgba(255, 45, 85, 0.2)',
+            boxShadow: '0 0 40px rgba(255, 45, 85, 0.08)',
           }}
+          initial={{ scale: 0.95, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.3 }}
         >
-          <ChevronLeft className="w-6 h-6" />
-        </button>
+          <div>
+            <h1 style={{
+              fontFamily: 'var(--font-heading)', fontSize: '24px', fontWeight: 200,
+              color: '#ffffff', letterSpacing: '0.1em', marginBottom: 4,
+            }}>
+              {vibe.name}
+            </h1>
+            {vibe.tags.length > 0 && (
+              <p style={{
+                fontFamily: 'var(--font-body)', fontSize: '13px', fontWeight: 300,
+                color: 'rgba(255, 255, 255, 0.4)',
+              }}>
+                {vibe.tags.join(' · ')}
+              </p>
+            )}
+          </div>
+          <div style={{
+            width: 40, height: 40, borderRadius: '10px',
+            background: 'rgba(255, 45, 85, 0.12)', border: '1px solid rgba(255, 45, 85, 0.25)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Music style={{ width: 18, height: 18, color: '#FF2D55' }} />
+          </div>
+        </motion.div>
+      </div>
 
-        {/* Vibe Header */}
-        <div className="pt-16 pb-6 px-6">
-          <motion.div
-            className="rounded-2xl p-6 flex items-center justify-between"
-            style={{
-              backgroundColor: vibe.color,
-              boxShadow: `0 8px 24px ${vibe.color}80, inset 0 2px 8px rgba(255, 255, 255, 0.3)`,
-            }}
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.3 }}
-          >
-            <div>
-              <h1
-                style={{
-                  fontFamily: 'Poppins, sans-serif',
-                  fontSize: '24px',
-                  fontWeight: 700,
-                  color: '#03071E',
-                  marginBottom: '4px'
-                }}
-              >
-                {vibe.name}
-              </h1>
-              {vibe.tags.length > 0 && (
-                <p
-                  style={{
-                    fontFamily: 'Poppins, sans-serif',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    color: '#370617',
-                  }}
-                >
-                  {vibe.tags.join(' • ')}
-                </p>
+      {/* Now Playing Bar (SDK mode) */}
+      {useSDK && nowPlaying && !isLoading && (
+        <div style={{ padding: '0 24px 16px' }}>
+          <div style={{
+            borderRadius: '14px', padding: '14px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: 'rgba(255, 45, 85, 0.06)',
+            border: '1px solid rgba(255, 45, 85, 0.15)',
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: '#FF2D55', opacity: 0.8, fontWeight: 400 }}>
+                {sdkPlayer.isCrossfading ? 'crossfading...' : 'now playing'}
+              </p>
+              <p style={{
+                fontFamily: 'var(--font-body)', fontSize: '14px', color: '#ffffff', fontWeight: 500,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {nowPlaying.name}
+              </p>
+              {/* Progress bar */}
+              {sdkPlayer.duration > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{
+                    height: 2, borderRadius: 1, overflow: 'hidden',
+                    background: 'rgba(255, 255, 255, 0.08)',
+                  }}>
+                    <div style={{
+                      height: '100%', borderRadius: 1, transition: 'width 0.3s',
+                      width: `${(sdkPlayer.currentTime / sdkPlayer.duration) * 100}%`,
+                      background: '#FF2D55',
+                    }} />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                    <span style={{ fontFamily: 'var(--font-body)', fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>
+                      {formatTime(sdkPlayer.currentTime)}
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-body)', fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>
+                      {formatTime(sdkPlayer.duration)}
+                    </span>
+                  </div>
+                </div>
               )}
             </div>
-            <Music className="w-6 h-6" style={{ color: '#03071E' }} />
-          </motion.div>
-        </div>
 
-        {/* Now Playing Bar (SDK mode) */}
-        {useSDK && nowPlaying && !isLoading && (
-          <div className="px-6 pb-4">
-            <div
-              className="rounded-xl p-3 flex items-center justify-between"
+            {/* Play/Pause */}
+            <motion.button
+              onClick={() => {
+                if (sdkPlayer.isPlaying) sdkPlayer.pause();
+                else sdkPlayer.resume();
+              }}
               style={{
-                backgroundColor: 'rgba(252, 191, 73, 0.15)',
-                border: '1px solid rgba(252, 191, 73, 0.3)',
+                marginLeft: 12, padding: 10, borderRadius: '50%',
+                background: 'rgba(255, 45, 85, 0.15)', border: 'none',
+                color: '#FF2D55', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
             >
-              <div className="flex-1 min-w-0">
-                <p style={{ fontSize: '12px', color: '#FCBF49', opacity: 0.8 }}>
-                  {sdkPlayer.isCrossfading ? 'Crossfading...' : 'Now Playing'}
-                </p>
-                <p
-                  className="truncate"
-                  style={{ fontSize: '14px', color: '#EAE2B7', fontWeight: 600 }}
-                >
-                  {nowPlaying.name}
-                </p>
-                {/* Progress bar */}
-                {sdkPlayer.duration > 0 && (
-                  <div className="mt-2">
-                    <div
-                      className="h-1 rounded-full overflow-hidden"
-                      style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}
-                    >
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{
-                          width: `${(sdkPlayer.currentTime / sdkPlayer.duration) * 100}%`,
-                          backgroundColor: '#FCBF49'
-                        }}
-                      />
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span style={{ fontSize: '10px', color: '#EAE2B7', opacity: 0.6 }}>
-                        {formatTime(sdkPlayer.currentTime)}
-                      </span>
-                      <span style={{ fontSize: '10px', color: '#EAE2B7', opacity: 0.6 }}>
-                        {formatTime(sdkPlayer.duration)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Play/Pause */}
-              <motion.button
-                onClick={() => {
-                  if (sdkPlayer.isPlaying) sdkPlayer.pause();
-                  else sdkPlayer.resume();
-                }}
-                className="ml-3 p-3 rounded-full"
-                style={{
-                  backgroundColor: 'rgba(252, 191, 73, 0.3)',
-                  color: '#FCBF49'
-                }}
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-              >
-                {sdkPlayer.isPlaying ? (
-                  <Pause className="w-5 h-5" />
-                ) : (
-                  <Play className="w-5 h-5" />
-                )}
-              </motion.button>
-            </div>
+              {sdkPlayer.isPlaying ? (
+                <Pause style={{ width: 18, height: 18 }} />
+              ) : (
+                <Play style={{ width: 18, height: 18 }} />
+              )}
+            </motion.button>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Loading State */}
-        {isLoading && (
-          <div className="px-6 pb-6 flex flex-col items-center justify-center" style={{ minHeight: '300px' }}>
-            <motion.div
-              className="w-12 h-12 border-4 border-#FCBF49 border-t-transparent rounded-full mb-4"
-              animate={{ rotate: 360 }}
-              transition={{
-                duration: 1,
-                repeat: Infinity,
-                ease: "linear"
-              }}
-            />
+      {/* Loading State */}
+      {isLoading && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 300, padding: '24px' }}>
+          <motion.div
+            style={{ width: 40, height: 40, border: '2px solid #FF2D55', borderTopColor: 'transparent', borderRadius: '50%' }}
+            animate={{ rotate: 360 }}
+            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+          />
+          <p style={{
+            fontFamily: 'var(--font-body)', fontSize: '14px', color: 'rgba(255,255,255,0.4)',
+            marginTop: 20, fontWeight: 300,
+          }}>
+            {isPremium && !sdkPlayer.isReady ? 'connecting to player...' : 'loading your queue...'}
+          </p>
+        </div>
+      )}
+
+      {/* Error State */}
+      {error && !isLoading && (
+        <div style={{ padding: '0 24px 24px' }}>
+          <div style={{
+            borderRadius: '14px', padding: '16px',
+            background: 'rgba(255, 45, 85, 0.08)',
+            border: '1px solid rgba(255, 45, 85, 0.2)',
+          }}>
             <p style={{
-              fontFamily: 'Poppins, sans-serif',
-              fontSize: '14px',
-              color: '#EAE2B7',
-              opacity: 0.8
+              fontFamily: 'var(--font-body)', fontSize: '14px', color: 'rgba(255,255,255,0.6)',
+              textAlign: 'center', fontWeight: 300,
             }}>
-              {isPremium && !sdkPlayer.isReady ? 'Connecting to Spotify...' : 'loading your queue...'}
+              {error}
             </p>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Error State */}
-        {error && !isLoading && (
-          <div className="px-6 pb-6">
-            <div
-              className="rounded-xl p-4"
-              style={{
-                backgroundColor: 'rgba(214, 40, 40, 0.3)',
-                border: '1px solid rgba(214, 40, 40, 0.5)'
-              }}
-            >
-              <p style={{
-                fontFamily: 'Poppins, sans-serif',
-                fontSize: '14px',
-                color: '#EAE2B7',
-                textAlign: 'center'
-              }}>
-                {error}
-              </p>
-            </div>
+      {/* SDK Error Notice */}
+      {isPremium && sdkPlayer.sdkError && !isLoading && (
+        <div style={{ padding: '0 24px 12px' }}>
+          <div style={{
+            borderRadius: '10px', padding: '8px 12px',
+            background: 'rgba(255, 165, 0, 0.08)',
+            border: '1px solid rgba(255, 165, 0, 0.2)',
+          }}>
+            <p style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: 'rgba(255, 165, 0, 0.7)', textAlign: 'center', fontWeight: 300 }}>
+              SDK: {sdkPlayer.sdkError} — using remote playback
+            </p>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* SDK Error Notice */}
-        {isPremium && sdkPlayer.sdkError && !isLoading && (
-          <div className="px-6 pb-3">
-            <div
-              className="rounded-lg p-2"
+      {/* Track Queue */}
+      {!isLoading && !error && tracks.length > 0 && (
+        <div style={{ padding: '0 24px 24px', flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <h2 style={{
+              fontFamily: 'var(--font-heading)', fontSize: '18px', fontWeight: 200,
+              color: '#ffffff', letterSpacing: '0.08em',
+            }}>
+              your queue
+            </h2>
+            <motion.button
+              onClick={handleNext}
+              disabled={nowPlayingIndex >= tracks.length - 1}
               style={{
-                backgroundColor: 'rgba(247, 127, 0, 0.2)',
-                border: '1px solid rgba(247, 127, 0, 0.4)'
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '8px 16px', borderRadius: '20px',
+                background: '#FF2D55', color: '#ffffff', border: 'none',
+                fontFamily: 'var(--font-body)', fontSize: '13px', fontWeight: 500,
+                cursor: 'pointer', opacity: nowPlayingIndex >= tracks.length - 1 ? 0.4 : 1,
               }}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
             >
-              <p style={{ fontSize: '11px', color: '#F77F00', textAlign: 'center' }}>
-                SDK: {sdkPlayer.sdkError} — using remote playback
-              </p>
-            </div>
+              <SkipForward style={{ width: 14, height: 14 }} />
+              next
+            </motion.button>
           </div>
-        )}
 
-        {/* Track Queue */}
-        {!isLoading && !error && tracks.length > 0 && (
-          <div className="px-6 pb-6">
-            <div className="flex items-center justify-between mb-3">
-              <h2
-                style={{
-                  fontFamily: 'Poppins, sans-serif',
-                  fontSize: '18px',
-                  fontWeight: 700,
-                  color: '#EAE2B7',
-                }}
-              >
-                Your Queue
-              </h2>
-              <button
-                onClick={handleNext}
-                disabled={nowPlayingIndex >= tracks.length - 1}
-                className="flex items-center gap-2 px-4 py-2 rounded-full transition-all disabled:opacity-50"
-                style={{
-                  fontFamily: 'Poppins, sans-serif',
-                  background: 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)',
-                  color: 'white',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                }}
-              >
-                <SkipForward className="w-4 h-4" />
-                Next
-              </button>
-            </div>
-            <div className="space-y-3">
-              {tracks.map((track, index) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {tracks.map((track, index) => {
+              const isNowPlaying = index === nowPlayingIndex;
+              return (
                 <motion.div
                   key={track.track_id || track.id || index}
-                  className="rounded-xl p-4 flex items-center gap-3"
                   style={{
-                    backgroundColor: index === nowPlayingIndex
-                      ? 'rgba(252, 191, 73, 0.2)'
-                      : 'rgba(0, 48, 73, 0.6)',
-                    border: index === nowPlayingIndex
-                      ? '1px solid rgba(252, 191, 73, 0.5)'
-                      : '1px solid rgba(252, 191, 73, 0.2)',
+                    borderRadius: '14px', padding: '14px 16px',
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    background: isNowPlaying ? 'rgba(255, 45, 85, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+                    border: isNowPlaying ? '1px solid rgba(255, 45, 85, 0.2)' : '1px solid rgba(255, 255, 255, 0.06)',
                   }}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.3, delay: index * 0.05 }}
+                  transition={{ duration: 0.3, delay: index * 0.04 }}
                 >
                   {/* Album Art or Placeholder */}
-                  <div
-                    className="rounded-lg flex-shrink-0 relative"
-                    style={{
-                      width: '50px',
-                      height: '50px',
-                      background: track.images && track.images.length > 0
-                        ? `url(${track.images[0].url}) center/cover`
-                        : `linear-gradient(135deg, ${vibe.color}80 0%, ${vibe.color}40 100%)`,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      overflow: 'hidden'
-                    }}
-                  >
+                  <div style={{
+                    width: 48, height: 48, borderRadius: '10px', flexShrink: 0, overflow: 'hidden',
+                    background: track.images && track.images.length > 0
+                      ? `url(${track.images[0].url}) center/cover`
+                      : 'rgba(255, 45, 85, 0.06)',
+                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    position: 'relative',
+                  }}>
                     {!track.images || track.images.length === 0 ? (
-                      <Music className="w-6 h-6" style={{ color: '#03071E', opacity: 0.5 }} />
+                      <Music style={{ width: 20, height: 20, color: 'rgba(255, 45, 85, 0.4)' }} />
                     ) : null}
                     {track.rank && (
-                      <div
-                        className="absolute top-0 right-0 rounded-bl-lg px-1.5 py-0.5"
-                        style={{
-                          backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                          fontSize: '10px',
-                          fontWeight: 700,
-                          color: '#FCBF49',
-                          fontFamily: 'Poppins, sans-serif'
-                        }}
-                      >
+                      <div style={{
+                        position: 'absolute', top: 0, right: 0,
+                        borderBottomLeftRadius: '6px', padding: '1px 5px',
+                        background: 'rgba(0, 0, 0, 0.7)',
+                        fontFamily: 'var(--font-body)', fontSize: '9px', fontWeight: 600, color: '#FF2D55',
+                      }}>
                         #{track.rank}
                       </div>
                     )}
                   </div>
 
                   {/* Song Info */}
-                  <div className="flex-1 min-w-0">
-                    <h3
-                      className="truncate"
-                      style={{
-                        fontFamily: 'Poppins, sans-serif',
-                        fontSize: '14px',
-                        fontWeight: 600,
-                        color: '#EAE2B7',
-                        marginBottom: '2px'
-                      }}
-                    >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <h3 style={{
+                      fontFamily: 'var(--font-body)', fontSize: '14px', fontWeight: 500,
+                      color: '#ffffff', marginBottom: 2,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
                       {track.name || 'Unknown Track'}
                     </h3>
-                    <p
-                      className="truncate"
-                      style={{
-                        fontFamily: 'Poppins, sans-serif',
-                        fontSize: '12px',
-                        color: '#EAE2B7',
-                        opacity: 0.7
-                      }}
-                    >
+                    <p style={{
+                      fontFamily: 'var(--font-body)', fontSize: '12px', fontWeight: 300,
+                      color: 'rgba(255, 255, 255, 0.4)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
                       {track.artist_names || track.artists || 'Unknown Artist'}
                     </p>
                     {track.tempo && (
-                      <p
-                        style={{
-                          fontFamily: 'Poppins, sans-serif',
-                          fontSize: '10px',
-                          color: '#FCBF49',
-                          opacity: 0.8,
-                          marginTop: '2px'
-                        }}
-                      >
+                      <p style={{
+                        fontFamily: 'var(--font-body)', fontSize: '10px', fontWeight: 400,
+                        color: '#FF2D55', opacity: 0.7, marginTop: 2,
+                      }}>
                         {Math.round(track.tempo)} BPM
                       </p>
                     )}
@@ -561,43 +513,40 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
 
                   {/* Duration */}
                   {track.duration_ms && (
-                    <span
-                      style={{
-                        fontFamily: 'Poppins, sans-serif',
-                        fontSize: '12px',
-                        color: '#EAE2B7',
-                        marginRight: '8px',
-                        opacity: 0.7
-                      }}
-                    >
+                    <span style={{
+                      fontFamily: 'var(--font-body)', fontSize: '11px', fontWeight: 300,
+                      color: 'rgba(255, 255, 255, 0.3)', marginRight: 4,
+                    }}>
                       {formatDuration(track.duration_ms)}
                     </span>
                   )}
 
                   {/* Play / Pause */}
                   <motion.button
-                    className="rounded-full p-2 flex-shrink-0 transition-all"
-                    style={{
-                      background: index === nowPlayingIndex && useSDK && sdkPlayer.isPlaying
-                        ? 'linear-gradient(135deg, #F77F00 0%, #D62828 100%)'
-                        : 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)',
-                    }}
                     onClick={() => handlePlayPause(track, index)}
+                    style={{
+                      padding: 8, borderRadius: '50%', flexShrink: 0, border: 'none', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: isNowPlaying && useSDK && sdkPlayer.isPlaying
+                        ? '#FF2D55'
+                        : 'rgba(255, 45, 85, 0.12)',
+                      color: isNowPlaying && useSDK && sdkPlayer.isPlaying ? '#ffffff' : '#FF2D55',
+                    }}
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.9 }}
                   >
-                    {index === nowPlayingIndex && useSDK && sdkPlayer.isPlaying ? (
-                      <Pause className="w-4 h-4 text-white fill-white" />
+                    {isNowPlaying && useSDK && sdkPlayer.isPlaying ? (
+                      <Pause style={{ width: 14, height: 14 }} />
                     ) : (
-                      <Play className="w-4 h-4 text-white fill-white" />
+                      <Play style={{ width: 14, height: 14 }} />
                     )}
                   </motion.button>
                 </motion.div>
-              ))}
-            </div>
+              );
+            })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

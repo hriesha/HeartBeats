@@ -9,157 +9,144 @@ interface ControlOptionsProps {
 
 export function ControlOptions({ onSelectCustom, onSelectWatch, onBack }: ControlOptionsProps) {
   return (
-    <div className="relative w-full h-full overflow-auto" style={{ fontFamily: 'Poppins, sans-serif' }}>
-      {/* Background with gradient overlay */}
-      <div 
-        className="absolute inset-0 z-0"
-        style={{
-          background: `linear-gradient(180deg, #003049 0%, #D62828 50%, #003049 100%)`
-        }}
-      />
-      
-      {/* Content */}
-      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 py-12">
-        {/* Back Button */}
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="absolute top-4 left-4 p-2 rounded-full transition-all"
-            style={{
-              backgroundColor: 'rgba(0, 48, 73, 0.8)',
-              color: '#FCBF49'
-            }}
-          >
-            <ChevronLeft className="w-6 h-6" />
-          </button>
-        )}
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 24px', position: 'relative' }}>
+      {/* Back Button */}
+      {onBack && (
+        <button
+          onClick={onBack}
+          style={{
+            position: 'absolute',
+            top: 20,
+            left: 20,
+            width: 40,
+            height: 40,
+            borderRadius: '50%',
+            background: 'rgba(255, 255, 255, 0.05)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            color: '#ffffff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+          }}
+        >
+          <ChevronLeft style={{ width: 20, height: 20 }} />
+        </button>
+      )}
 
-        {/* Header */}
-        <div className="mb-16 text-center">
-          <h1 
-            className="mb-2"
-            style={{
-              fontFamily: 'Poppins, sans-serif',
-              fontWeight: 700,
-              fontSize: '32px',
-              color: '#EAE2B7',
-              textShadow: '0 2px 8px rgba(252, 191, 73, 0.4)'
-            }}
-          >
-            how do you want to track?
-          </h1>
-          <p 
-            style={{
-              fontFamily: 'Poppins, sans-serif',
-              fontSize: '16px',
-              color: '#EAE2B7',
-              fontWeight: 400,
-              opacity: 0.8,
-              lineHeight: 1.5
-            }}
-          >
-            choose your preferred control method
-          </p>
-        </div>
+      {/* Header */}
+      <div style={{ textAlign: 'center', marginBottom: 48 }}>
+        <h1
+          style={{
+            fontFamily: 'var(--font-heading)',
+            fontWeight: 200,
+            fontSize: '28px',
+            color: '#ffffff',
+            letterSpacing: '0.1em',
+            marginBottom: 12,
+          }}
+        >
+          how do you track?
+        </h1>
+        <p
+          style={{
+            fontFamily: 'var(--font-body)',
+            fontSize: '14px',
+            color: 'rgba(255,255,255,0.4)',
+            fontWeight: 300,
+          }}
+        >
+          choose your preferred method
+        </p>
+      </div>
 
-        {/* Options */}
-        <div className="w-full space-y-6">
-          {/* Custom Controls */}
-          <motion.button
-            onClick={onSelectCustom}
-            className="w-full rounded-3xl p-8 flex flex-col items-center justify-center"
+      {/* Options */}
+      <div style={{ width: '100%', maxWidth: '340px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* Custom Controls */}
+        <motion.button
+          onClick={onSelectCustom}
+          style={{
+            width: '100%',
+            padding: '28px 24px',
+            borderRadius: '16px',
+            background: 'rgba(255, 255, 255, 0.03)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '20px',
+            textAlign: 'left',
+          }}
+          whileHover={{ scale: 1.02, borderColor: 'rgba(255, 45, 85, 0.3)', background: 'rgba(255, 45, 85, 0.05)' }}
+          whileTap={{ scale: 0.98 }}
+        >
+          <div
             style={{
-              background: 'linear-gradient(135deg, rgba(252, 191, 73, 0.15) 0%, rgba(247, 127, 0, 0.15) 100%)',
-              border: '2px solid #FCBF49',
-              boxShadow: '0 8px 24px rgba(252, 191, 73, 0.3)',
-              cursor: 'pointer'
+              width: 48,
+              height: 48,
+              borderRadius: '12px',
+              background: 'rgba(255, 45, 85, 0.1)',
+              border: '1px solid rgba(255, 45, 85, 0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
             }}
-            whileHover={{ 
-              scale: 1.03,
-              boxShadow: '0 12px 32px rgba(252, 191, 73, 0.5)'
-            }}
-            whileTap={{ scale: 0.97 }}
           >
-            <div 
-              className="rounded-full p-4 mb-4"
-              style={{
-                background: 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)'
-              }}
-            >
-              <Sliders className="w-8 h-8 text-white" />
-            </div>
-            <h2 
-              style={{
-                fontFamily: 'Poppins, sans-serif',
-                fontSize: '24px',
-                fontWeight: 700,
-                color: '#EAE2B7',
-                marginBottom: '8px'
-              }}
-            >
-              custom controls
+            <Sliders style={{ width: 22, height: 22, color: '#FF2D55' }} />
+          </div>
+          <div>
+            <h2 style={{ fontFamily: 'var(--font-body)', fontSize: '16px', fontWeight: 500, color: '#ffffff', marginBottom: 4 }}>
+              set your pace
             </h2>
-            <p 
-              style={{
-                fontFamily: 'Poppins, sans-serif',
-                fontSize: '14px',
-                color: '#EAE2B7',
-                textAlign: 'center',
-                opacity: 0.8
-              }}
-            >
+            <p style={{ fontFamily: 'var(--font-body)', fontSize: '13px', color: 'rgba(255,255,255,0.4)', fontWeight: 300 }}>
               manually set your BPM and preferences
             </p>
-          </motion.button>
+          </div>
+        </motion.button>
 
-          {/* Connect Watch */}
-          <motion.button
-            onClick={onSelectWatch}
-            className="w-full rounded-3xl p-8 flex flex-col items-center justify-center"
+        {/* Connect Watch */}
+        <motion.button
+          onClick={onSelectWatch}
+          style={{
+            width: '100%',
+            padding: '28px 24px',
+            borderRadius: '16px',
+            background: 'rgba(255, 255, 255, 0.03)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '20px',
+            textAlign: 'left',
+          }}
+          whileHover={{ scale: 1.02, borderColor: 'rgba(255, 45, 85, 0.3)', background: 'rgba(255, 45, 85, 0.05)' }}
+          whileTap={{ scale: 0.98 }}
+        >
+          <div
             style={{
-              background: 'linear-gradient(135deg, rgba(252, 191, 73, 0.15) 0%, rgba(247, 127, 0, 0.15) 100%)',
-              border: '2px solid #FCBF49',
-              boxShadow: '0 8px 24px rgba(252, 191, 73, 0.3)',
-              cursor: 'pointer'
+              width: 48,
+              height: 48,
+              borderRadius: '12px',
+              background: 'rgba(255, 45, 85, 0.1)',
+              border: '1px solid rgba(255, 45, 85, 0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
             }}
-            whileHover={{ 
-              scale: 1.03,
-              boxShadow: '0 12px 32px rgba(252, 191, 73, 0.5)'
-            }}
-            whileTap={{ scale: 0.97 }}
           >
-            <div 
-              className="rounded-full p-4 mb-4"
-              style={{
-                background: 'linear-gradient(135deg, #FCBF49 0%, #F77F00 100%)'
-              }}
-            >
-              <Watch className="w-8 h-8 text-white" />
-            </div>
-            <h2 
-              style={{
-                fontFamily: 'Poppins, sans-serif',
-                fontSize: '24px',
-                fontWeight: 700,
-                color: '#EAE2B7',
-                marginBottom: '8px'
-              }}
-            >
+            <Watch style={{ width: 22, height: 22, color: '#FF2D55' }} />
+          </div>
+          <div>
+            <h2 style={{ fontFamily: 'var(--font-body)', fontSize: '16px', fontWeight: 500, color: '#ffffff', marginBottom: 4 }}>
               connect your watch
             </h2>
-            <p 
-              style={{
-                fontFamily: 'Poppins, sans-serif',
-                fontSize: '14px',
-                color: '#EAE2B7',
-                textAlign: 'center',
-                opacity: 0.8
-              }}
-            >
+            <p style={{ fontFamily: 'var(--font-body)', fontSize: '13px', color: 'rgba(255,255,255,0.4)', fontWeight: 300 }}>
               sync with your fitness tracker
             </p>
-          </motion.button>
-        </div>
+          </div>
+        </motion.button>
       </div>
     </div>
   );
