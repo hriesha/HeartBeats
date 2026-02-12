@@ -25,16 +25,16 @@ export interface Track {
   loudness: number;
   distance: number;
   rank: number;
-  // Spotify API fields (when available)
+  // Metadata
   id?: string;
   artist_names?: string;
   album?: string;
   album_id?: string;
   duration_ms?: number;
-  preview_url?: string;
-  external_urls?: string;
   images?: Array<{ url: string; height: number; width: number }>;
   release_date?: string;
+  // Apple Music
+  apple_music_id?: string;
 }
 
 export interface ApiResponse<T> {
@@ -72,8 +72,6 @@ class HeartBeatsApi {
         };
       }
 
-      // The API returns {success: true, clusters: ..., total_tracks: ...}
-      // We need to extract the data part (everything except 'success')
       const { success, ...rest } = data;
       return {
         success: true,
@@ -87,9 +85,6 @@ class HeartBeatsApi {
     }
   }
 
-  /**
-   * Get clusters from user's library
-   */
   async getClusters(csvPath?: string, nClusters: number = 4): Promise<ApiResponse<{ clusters: Cluster[]; total_tracks: number }>> {
     const response = await this.request<{ clusters: Cluster[]; total_tracks: number }>('/api/clusters', {
       method: 'POST',
@@ -101,9 +96,6 @@ class HeartBeatsApi {
     return response;
   }
 
-  /**
-   * Get tracks for a given BPM and cluster using KNN
-   */
   async getTracks(
     bpm: number,
     clusterId?: number,
@@ -120,9 +112,6 @@ class HeartBeatsApi {
     return response;
   }
 
-  /**
-   * Get full track details from Spotify API
-   */
   async getTrackDetails(trackIds: string[]): Promise<ApiResponse<{ tracks: Track[]; count: number }>> {
     const response = await this.request<{ tracks: Track[]; count: number }>('/api/tracks/details', {
       method: 'POST',
@@ -133,9 +122,6 @@ class HeartBeatsApi {
     return response;
   }
 
-  /**
-   * Combined: Get tracks for BPM + cluster, then fetch full details
-   */
   async getClusterTracks(
     bpm: number,
     clusterId?: number,

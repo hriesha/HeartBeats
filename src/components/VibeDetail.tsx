@@ -2,22 +2,16 @@ import { motion } from 'motion/react';
 import { ChevronLeft, Play, Pause, Music, SkipForward } from 'lucide-react';
 import { VibeType } from '../App';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getClusterTracks, getTracksFromTrack, startPlayback, Track } from '../utils/api';
-import { useSpotifyPlayer } from '../hooks/useSpotifyPlayer';
+import { getClusterTracks, getTracksFromTrack, resolveAppleMusicIds, Track } from '../utils/api';
+import { useMusicKitPlayer } from '../hooks/useMusicKitPlayer';
 
 interface VibeDetailProps {
   vibe: VibeType;
   bpm?: number;
   onBack: () => void;
-  isPremium?: boolean;
 }
 
-function toUri(t: Track): string {
-  const id = t.id ?? t.track_id;
-  return id?.startsWith('spotify:') ? id : `spotify:track:${id}`;
-}
-
-export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeDetailProps) {
+export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [nowPlayingIndex, setNowPlayingIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -27,11 +21,10 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
   const tracksRef = useRef<Track[]>([]);
   const nowPlayingIndexRef = useRef(0);
 
-  // Keep refs in sync for use in callbacks
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { nowPlayingIndexRef.current = nowPlayingIndex; }, [nowPlayingIndex]);
 
-  // Auto-advance handler for SDK player
+  // Auto-advance handler
   const handleAutoAdvance = useCallback(() => {
     const currentIdx = nowPlayingIndexRef.current;
     const currentTracks = tracksRef.current;
@@ -41,65 +34,52 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
     const next = currentTracks[nextIdx];
     setNowPlayingIndex(nextIdx);
 
-    // Extend queue with KNN recommendations
+    // Extend queue with more tracks from Deezer
     const tid = next.track_id ?? next.id;
     if (tid) {
-      getTracksFromTrack(tid, clusterId, 10).then(from => {
+      const existingIds = currentTracks.map(t => t.track_id ?? t.id).filter(Boolean) as string[];
+      getTracksFromTrack(tid, clusterId, 10, existingIds).then(async (from) => {
         if (!from?.tracks?.length) return;
         const add = from.tracks.filter(m => (m.track_id ?? m.id) !== tid);
+        // Resolve Apple Music IDs for new tracks
+        const resolved = await resolveAppleMusicIds(add);
         setTracks(prev => {
           const rest = prev.slice(nextIdx + 1);
           const seen = new Set(rest.map(t => t.track_id ?? t.id));
-          const extra = add.filter(m => !seen.has(m.track_id ?? m.id));
+          const extra = resolved.filter(m => !seen.has(m.track_id ?? m.id));
           return [...prev.slice(0, nextIdx + 1), ...extra, ...rest];
         });
       });
     }
   }, [clusterId]);
 
-  // SDK player for in-browser playback
-  const sdkPlayer = useSpotifyPlayer({
+  // MusicKit player
+  const player = useMusicKitPlayer({
     crossfadeDuration: 5000,
     onTrackEnd: handleAutoAdvance,
   });
 
-  const useSDK = isPremium && sdkPlayer.isReady;
-
-  // Track whether the index change was a manual action (click/skip)
+  // Track whether the index change was a manual action
   const isManualActionRef = useRef(false);
   const prevAutoIndexRef = useRef(-1);
 
-  // Crossfade to next track ONLY on auto-advance (track ended), not manual clicks
+  // Crossfade to next track on auto-advance
   useEffect(() => {
     const prev = prevAutoIndexRef.current;
     prevAutoIndexRef.current = nowPlayingIndex;
 
-    // Manual actions handle playback themselves — skip crossfade
     if (isManualActionRef.current) {
       isManualActionRef.current = false;
       return;
     }
 
-    // Only crossfade on auto-advance (index incremented by 1)
-    if (useSDK && nowPlayingIndex >= 0 && prev >= 0 && nowPlayingIndex === prev + 1) {
+    if (player.isReady && nowPlayingIndex >= 0 && prev >= 0 && nowPlayingIndex === prev + 1) {
       const track = tracks[nowPlayingIndex];
-      if (track) {
-        sdkPlayer.crossfadeTo(toUri(track));
+      if (track?.apple_music_id) {
+        player.crossfadeTo(track.apple_music_id);
       }
     }
   }, [nowPlayingIndex]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Play a track by index
-  const playTrack = useCallback(async (index: number) => {
-    const t = tracks[index];
-    if (!t) return;
-    if (useSDK) {
-      await sdkPlayer.skipTo(toUri(t));
-    } else {
-      const res = await startPlayback([toUri(t)]);
-      if (!res.success) console.warn('startPlayback failed:', res.error);
-    }
-  }, [tracks, useSDK, sdkPlayer]);
 
   // Initial data fetch and first track playback
   const initialPlayDone = useRef(false);
@@ -111,17 +91,27 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
       setIsLoading(true);
       setError(null);
       try {
-        const clusterData = await getClusterTracks(clusterId, bpm, 20);
+        const clusterData = await getClusterTracks(clusterId, bpm, 50);
         if (!clusterData?.tracks?.length) {
           setError('No tracks found for this cluster. Try another vibe.');
           return;
         }
-        const allClusterTracks = clusterData.tracks;
         if (cancelled) return;
 
-        const randomIdx = Math.floor(Math.random() * allClusterTracks.length);
-        const randomTrack = allClusterTracks[randomIdx];
-        const otherTracks = allClusterTracks.filter((_, idx) => idx !== randomIdx);
+        // Resolve Apple Music IDs for all tracks
+        const resolved = await resolveAppleMusicIds(clusterData.tracks);
+        // Filter out tracks without Apple Music IDs
+        const playable = resolved.filter(t => t.apple_music_id);
+
+        if (playable.length === 0) {
+          setError('Could not find these tracks on Apple Music. Try another vibe.');
+          return;
+        }
+        if (cancelled) return;
+
+        const randomIdx = Math.floor(Math.random() * playable.length);
+        const randomTrack = playable[randomIdx];
+        const otherTracks = playable.filter((_, idx) => idx !== randomIdx);
         const ordered = [randomTrack, ...otherTracks];
 
         setTracks(ordered);
@@ -129,7 +119,6 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
         setNowPlayingIndex(0);
         nowPlayingIndexRef.current = 0;
 
-        // Start playback after state is set
         if (!cancelled) {
           initialPlayDone.current = true;
         }
@@ -147,26 +136,20 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
     return () => { cancelled = true; };
   }, [clusterId, bpm]);
 
-  // Start playback once SDK is ready and tracks are loaded
+  // Start playback once player is ready and tracks are loaded
   useEffect(() => {
     if (!initialPlayDone.current || tracks.length === 0) return;
     const firstTrack = tracks[0];
-    if (!firstTrack) return;
+    if (!firstTrack?.apple_music_id) return;
+    if (!player.isReady) return;
 
-    // If Premium, wait for SDK to be ready — don't fall back to backend
-    if (isPremium && !sdkPlayer.isReady) return;
+    player.play(firstTrack.apple_music_id);
+    initialPlayDone.current = false;
+  }, [player.isReady, tracks]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    if (useSDK) {
-      sdkPlayer.play(toUri(firstTrack));
-    } else {
-      startPlayback([toUri(firstTrack)]);
-    }
-    initialPlayDone.current = false; // Only play once
-  }, [useSDK, tracks]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Cleanup SDK on unmount
+  // Cleanup on unmount
   useEffect(() => {
-    return () => { sdkPlayer.cleanup(); };
+    return () => { player.cleanup(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleNext = async () => {
@@ -174,53 +157,40 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
     if (nextIdx >= tracks.length) return;
     const next = tracks[nextIdx];
 
-    // Manual skip with crossfade, prevent auto-advance double-trigger
     isManualActionRef.current = true;
     setNowPlayingIndex(nextIdx);
-    if (useSDK) {
-      await sdkPlayer.crossfadeTo(toUri(next));
-    } else {
-      await playTrack(nextIdx);
+    if (next.apple_music_id) {
+      await player.crossfadeTo(next.apple_music_id);
     }
 
-    // Extend queue with KNN recommendations
+    // Extend queue
     const tid = next.track_id ?? next.id;
     if (!tid) return;
-    const from = await getTracksFromTrack(tid, clusterId, 10);
+    const existingIds = tracks.map(t => t.track_id ?? t.id).filter(Boolean) as string[];
+    const from = await getTracksFromTrack(tid, clusterId, 10, existingIds);
     if (!from?.tracks?.length) return;
     const add = from.tracks.filter(m => (m.track_id ?? m.id) !== tid);
+    const resolved = await resolveAppleMusicIds(add);
     setTracks(prev => {
       const rest = prev.slice(nextIdx + 1);
       const seen = new Set(rest.map(t => t.track_id ?? t.id));
-      const extra = add.filter(m => !seen.has(m.track_id ?? m.id));
+      const extra = resolved.filter(m => !seen.has(m.track_id ?? m.id) && m.apple_music_id);
       return [...prev.slice(0, nextIdx + 1), ...extra, ...rest];
     });
   };
 
   const handlePlayPause = async (track: Track, index: number) => {
-    if (!useSDK) {
-      // Non-SDK: same behavior as before
-      const ok = await startPlayback([toUri(track)]);
-      if (ok.success) {
-        setNowPlayingIndex(index);
-        return;
-      }
-      if (track.preview_url) window.open(track.preview_url, '_blank');
-      else if (track.external_urls) window.open(track.external_urls, '_blank');
-      return;
-    }
-
-    // SDK mode: play/pause toggle
     if (index === nowPlayingIndex) {
-      if (sdkPlayer.isPlaying) {
-        sdkPlayer.pause();
+      if (player.isPlaying) {
+        player.pause();
       } else {
-        sdkPlayer.resume();
+        player.resume();
       }
     } else {
+      if (!track.apple_music_id) return;
       isManualActionRef.current = true;
       setNowPlayingIndex(index);
-      await sdkPlayer.crossfadeTo(toUri(track));
+      await player.crossfadeTo(track.apple_music_id);
     }
   };
 
@@ -298,8 +268,8 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
         </motion.div>
       </div>
 
-      {/* Now Playing Bar (SDK mode) */}
-      {useSDK && nowPlaying && !isLoading && (
+      {/* Now Playing Bar */}
+      {player.isReady && nowPlaying && !isLoading && (
         <div style={{ padding: '0 24px 16px' }}>
           <div style={{
             borderRadius: '14px', padding: '14px 16px',
@@ -309,7 +279,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
           }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: '#FF2D55', opacity: 0.8, fontWeight: 400 }}>
-                {sdkPlayer.isCrossfading ? 'crossfading...' : 'now playing'}
+                {player.isCrossfading ? 'crossfading...' : 'now playing'}
               </p>
               <p style={{
                 fontFamily: 'var(--font-body)', fontSize: '14px', color: '#ffffff', fontWeight: 500,
@@ -317,8 +287,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
               }}>
                 {nowPlaying.name}
               </p>
-              {/* Progress bar */}
-              {sdkPlayer.duration > 0 && (
+              {player.duration > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <div style={{
                     height: 2, borderRadius: 1, overflow: 'hidden',
@@ -326,27 +295,26 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
                   }}>
                     <div style={{
                       height: '100%', borderRadius: 1, transition: 'width 0.3s',
-                      width: `${(sdkPlayer.currentTime / sdkPlayer.duration) * 100}%`,
+                      width: `${(player.currentTime / player.duration) * 100}%`,
                       background: '#FF2D55',
                     }} />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
                     <span style={{ fontFamily: 'var(--font-body)', fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>
-                      {formatTime(sdkPlayer.currentTime)}
+                      {formatTime(player.currentTime)}
                     </span>
                     <span style={{ fontFamily: 'var(--font-body)', fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>
-                      {formatTime(sdkPlayer.duration)}
+                      {formatTime(player.duration)}
                     </span>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Play/Pause */}
             <motion.button
               onClick={() => {
-                if (sdkPlayer.isPlaying) sdkPlayer.pause();
-                else sdkPlayer.resume();
+                if (player.isPlaying) player.pause();
+                else player.resume();
               }}
               style={{
                 marginLeft: 12, padding: 10, borderRadius: '50%',
@@ -356,7 +324,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
             >
-              {sdkPlayer.isPlaying ? (
+              {player.isPlaying ? (
                 <Pause style={{ width: 18, height: 18 }} />
               ) : (
                 <Play style={{ width: 18, height: 18 }} />
@@ -378,7 +346,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
             fontFamily: 'var(--font-body)', fontSize: '14px', color: 'rgba(255,255,255,0.4)',
             marginTop: 20, fontWeight: 300,
           }}>
-            {isPremium && !sdkPlayer.isReady ? 'connecting to player...' : 'loading your queue...'}
+            {!player.isReady ? 'connecting to player...' : 'loading your queue...'}
           </p>
         </div>
       )}
@@ -402,7 +370,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
       )}
 
       {/* SDK Error Notice */}
-      {isPremium && sdkPlayer.sdkError && !isLoading && (
+      {player.sdkError && !isLoading && (
         <div style={{ padding: '0 24px 12px' }}>
           <div style={{
             borderRadius: '10px', padding: '8px 12px',
@@ -410,7 +378,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
             border: '1px solid rgba(255, 165, 0, 0.2)',
           }}>
             <p style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: 'rgba(255, 165, 0, 0.7)', textAlign: 'center', fontWeight: 300 }}>
-              SDK: {sdkPlayer.sdkError} — using remote playback
+              {player.sdkError}
             </p>
           </div>
         </div>
@@ -522,25 +490,27 @@ export function VibeDetail({ vibe, bpm = 120, onBack, isPremium = false }: VibeD
                   )}
 
                   {/* Play / Pause */}
-                  <motion.button
-                    onClick={() => handlePlayPause(track, index)}
-                    style={{
-                      padding: 8, borderRadius: '50%', flexShrink: 0, border: 'none', cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      background: isNowPlaying && useSDK && sdkPlayer.isPlaying
-                        ? '#FF2D55'
-                        : 'rgba(255, 45, 85, 0.12)',
-                      color: isNowPlaying && useSDK && sdkPlayer.isPlaying ? '#ffffff' : '#FF2D55',
-                    }}
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                  >
-                    {isNowPlaying && useSDK && sdkPlayer.isPlaying ? (
-                      <Pause style={{ width: 14, height: 14 }} />
-                    ) : (
-                      <Play style={{ width: 14, height: 14 }} />
-                    )}
-                  </motion.button>
+                  {track.apple_music_id && (
+                    <motion.button
+                      onClick={() => handlePlayPause(track, index)}
+                      style={{
+                        padding: 8, borderRadius: '50%', flexShrink: 0, border: 'none', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: isNowPlaying && player.isPlaying
+                          ? '#FF2D55'
+                          : 'rgba(255, 45, 85, 0.12)',
+                        color: isNowPlaying && player.isPlaying ? '#ffffff' : '#FF2D55',
+                      }}
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
+                    >
+                      {isNowPlaying && player.isPlaying ? (
+                        <Pause style={{ width: 14, height: 14 }} />
+                      ) : (
+                        <Play style={{ width: 14, height: 14 }} />
+                      )}
+                    </motion.button>
+                  )}
                 </motion.div>
               );
             })}

@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react';
 import { GlowingArcs } from './components/GlowingArcs';
 import { CursorTrail } from './components/CursorTrail';
-import { SpotifyConnect } from './components/SpotifyConnect';
+import { AppleMusicConnect } from './components/AppleMusicConnect';
 import { ControlOptions } from './components/ControlOptions';
 import { PaceSelection } from './components/PaceSelection';
 import { WorkoutSelection } from './components/WorkoutSelection';
 import { VibeSelection } from './components/VibeSelection';
 import { VibeDetail } from './components/VibeDetail';
 import { TrackerConnected } from './components/TrackerConnected';
-import { checkSpotifyStatus, SpotifyUser } from './utils/api';
 
 export type VibeType = {
   id: string;
@@ -20,70 +19,63 @@ export type VibeType = {
 };
 
 export default function App() {
-  // Screen states: 'loading' -> check auth -> 'spotify' (if not auth) or 'controlOptions' (if auth)
-  const [currentScreen, setCurrentScreen] = useState<'loading' | 'spotify' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'detail' | 'trackerConnected'>('loading');
-  const [selectedBPM, setSelectedBPM] = useState(120); // Keep for backward compatibility with workouts
+  const [currentScreen, setCurrentScreen] = useState<'loading' | 'connect' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'detail' | 'trackerConnected'>('loading');
+  const [selectedBPM, setSelectedBPM] = useState(120);
   const [paceValue, setPaceValue] = useState(10.0);
   const [paceUnit, setPaceUnit] = useState<'min/mile' | 'min/km'>('min/mile');
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
-  const [spotifyUser, setSpotifyUser] = useState<SpotifyUser | null>(null);
-  const isPremium = spotifyUser?.product === 'premium';
 
-  // On mount: Check if user is already authenticated with Spotify
+  // On mount: Check if MusicKit is already authorized
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const status = await checkSpotifyStatus();
-        if (status.connected && status.user) {
-          // User is already logged in - skip to main app
-          setSpotifyUser(status.user);
+        // Wait for MusicKit to be available
+        const waitForMusicKit = (): Promise<void> => {
+          return new Promise((resolve) => {
+            if (window.MusicKit) { resolve(); return; }
+            const check = setInterval(() => {
+              if (window.MusicKit) { clearInterval(check); resolve(); }
+            }, 100);
+            setTimeout(() => { clearInterval(check); resolve(); }, 5000);
+          });
+        };
+
+        await waitForMusicKit();
+
+        if (!window.MusicKit) {
+          setCurrentScreen('connect');
+          return;
+        }
+
+        const developerToken = import.meta.env.VITE_APPLE_MUSIC_DEVELOPER_TOKEN;
+        if (!developerToken) {
+          setCurrentScreen('connect');
+          return;
+        }
+
+        const music = await window.MusicKit.configure({
+          developerToken,
+          app: { name: 'HeartBeats', build: '1.0.0' },
+        });
+
+        if (music.isAuthorized) {
           setCurrentScreen('controlOptions');
         } else {
-          // User needs to log in
-          setCurrentScreen('spotify');
+          setCurrentScreen('connect');
         }
       } catch (error) {
         console.error('Auth check failed:', error);
-        setCurrentScreen('spotify');
+        setCurrentScreen('connect');
       }
     };
     checkAuth();
   }, []);
 
-  // Handle OAuth callback URL parameters (after redirect from Spotify)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const spotifyConnected = params.get('spotify_connected');
-    const spotifyError = params.get('spotify_error');
-
-    if (spotifyConnected === 'true') {
-      // Clear URL params (clean up the URL)
-      window.history.replaceState({}, '', window.location.pathname);
-
-      // Refresh auth status to get user info
-      checkSpotifyStatus().then(status => {
-        if (status.connected && status.user) {
-          setSpotifyUser(status.user);
-          setCurrentScreen('controlOptions');
-        }
-      });
-    } else if (spotifyError) {
-      // Clear URL params
-      window.history.replaceState({}, '', window.location.pathname);
-      console.error('Spotify OAuth error:', spotifyError);
-      // Stay on spotify screen so user can try again
-      setCurrentScreen('spotify');
-    }
-  }, []);
-
-  const handleSpotifyConnected = () => {
-    // This is called after successful OAuth (user is redirected back)
-    // The useEffect above handles the actual auth check
+  const handleConnected = () => {
     setCurrentScreen('controlOptions');
   };
 
-  const handleSpotifySkip = () => {
-    // Allow skipping Spotify login (limited functionality)
+  const handleSkip = () => {
     setCurrentScreen('controlOptions');
   };
 
@@ -92,12 +84,10 @@ export default function App() {
   };
 
   const handleSelectWatch = () => {
-    // Show tracker connected screen
     setCurrentScreen('trackerConnected');
   };
 
   const handleTrackerConnected = () => {
-    // Set a default BPM from watch simulation
     setSelectedBPM(125);
     setCurrentScreen('vibe');
   };
@@ -113,7 +103,6 @@ export default function App() {
   };
 
   const handleWorkoutSelect = (workout: string) => {
-    // Different workouts have different BPM ranges
     const workoutBPMs: { [key: string]: number } = {
       jogging: 130,
       cycling: 120,
@@ -141,10 +130,8 @@ export default function App() {
     } else if (currentScreen === 'bpm') {
       setCurrentScreen('controlOptions');
     } else if (currentScreen === 'controlOptions') {
-      // Go back to Spotify login (allows re-auth or logging into different account)
-      setCurrentScreen('spotify');
+      setCurrentScreen('connect');
     }
-    // No back from 'spotify' - it's the first screen now
   };
 
   return (
@@ -152,7 +139,6 @@ export default function App() {
       <GlowingArcs />
       <CursorTrail />
       <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
-        {/* Loading state while checking auth */}
         {currentScreen === 'loading' && (
           <div className="w-full h-full flex items-center justify-center" style={{ minHeight: '100vh' }}>
             <div className="text-center">
@@ -161,12 +147,12 @@ export default function App() {
             </div>
           </div>
         )}
-        {currentScreen === 'spotify' && <SpotifyConnect onConnected={handleSpotifyConnected} onSkip={handleSpotifySkip} />}
+        {currentScreen === 'connect' && <AppleMusicConnect onConnected={handleConnected} onSkip={handleSkip} />}
         {currentScreen === 'controlOptions' && <ControlOptions onSelectCustom={handleSelectCustomControls} onSelectWatch={handleSelectWatch} onBack={handleBack} />}
         {currentScreen === 'bpm' && <PaceSelection onSubmit={handlePaceSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}
         {currentScreen === 'vibe' && <VibeSelection paceValue={paceValue} paceUnit={paceUnit} bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
-        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} isPremium={isPremium} />}
+        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} />}
         {currentScreen === 'trackerConnected' && <TrackerConnected onComplete={handleTrackerConnected} />}
       </div>
     </div>

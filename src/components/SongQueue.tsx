@@ -1,128 +1,89 @@
 import React, { useCallback } from 'react';
 import { motion } from 'motion/react';
-import { Play, Pause, Music, ExternalLink, SkipForward, ChevronLeft } from 'lucide-react';
+import { Play, Pause, Music, SkipForward, ChevronLeft } from 'lucide-react';
 import { Track } from '../utils/api';
-import { useCrossfade } from '../hooks/useCrossfade';
-import { useSpotifyPlayer } from '../hooks/useSpotifyPlayer';
+import { useMusicKitPlayer } from '../hooks/useMusicKitPlayer';
 
 interface SongQueueProps {
   tracks: Track[];
   clusterId: number;
   bpm: number;
   onBack: () => void;
-  isPremium?: boolean;
 }
 
-function toUri(track: Track): string {
-  const id = track.id ?? track.track_id;
-  return id?.startsWith('spotify:') ? id : `spotify:track:${id}`;
-}
-
-export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }: SongQueueProps) {
+export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
   const [currentTrackIndex, setCurrentTrackIndex] = React.useState<number>(-1);
 
   const currentTrack = currentTrackIndex >= 0 ? tracks[currentTrackIndex] : null;
   const playingTrackId = currentTrack?.track_id || null;
 
-  // Handle track end - advance to next track
   const handleTrackEnd = useCallback(() => {
     setCurrentTrackIndex((prevIndex) => {
       const nextIndex = prevIndex + 1;
-      if (nextIndex < tracks.length) {
-        // SDK can play any track; preview mode needs preview_url
-        if (isPremium || tracks[nextIndex]?.preview_url) {
-          return nextIndex;
-        }
+      if (nextIndex < tracks.length && tracks[nextIndex]?.apple_music_id) {
+        return nextIndex;
       }
       return -1;
     });
-  }, [tracks, isPremium]);
+  }, [tracks]);
 
-  // SDK player for Premium users
-  const sdkPlayer = useSpotifyPlayer({
+  const player = useMusicKitPlayer({
     crossfadeDuration: 5000,
-    onTrackEnd: isPremium ? handleTrackEnd : undefined,
+    onTrackEnd: handleTrackEnd,
   });
-
-  // Preview player for free-tier users
-  const previewPlayer = useCrossfade({
-    crossfadeDuration: 5000,
-    onTrackEnd: !isPremium ? handleTrackEnd : undefined,
-  });
-
-  // Pick active player based on Premium status + SDK readiness
-  const useSDK = isPremium && sdkPlayer.isReady;
-  const player = useSDK ? sdkPlayer : previewPlayer;
-
-  // Get the playback target for a track (URI for SDK, preview URL for free tier)
-  const getPlaybackTarget = (track: Track): string | null => {
-    if (useSDK) return toUri(track);
-    return track.preview_url || null;
-  };
 
   // Cleanup on unmount
   React.useEffect(() => {
-    return () => {
-      sdkPlayer.cleanup();
-      previewPlayer.cleanup();
-    };
+    return () => { player.cleanup(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Track whether the index change was a manual action (click/skip button)
   const isManualActionRef = React.useRef(false);
   const prevIndexRef = React.useRef<number>(-1);
 
-  // Handle crossfade ONLY for auto-advance (track ended), not manual clicks
+  // Auto-advance crossfade
   React.useEffect(() => {
     const prevIndex = prevIndexRef.current;
     prevIndexRef.current = currentTrackIndex;
 
-    // Manual actions (click, skip button) handle playback themselves — skip crossfade
     if (isManualActionRef.current) {
       isManualActionRef.current = false;
       return;
     }
 
-    // Auto-advance: crossfade to the next track
-    if (
-      currentTrackIndex >= 0 &&
-      prevIndex >= 0 &&
-      currentTrackIndex === prevIndex + 1
-    ) {
-      const target = getPlaybackTarget(tracks[currentTrackIndex]);
-      if (target) player.crossfadeTo(target);
+    if (currentTrackIndex >= 0 && prevIndex >= 0 && currentTrackIndex === prevIndex + 1) {
+      const track = tracks[currentTrackIndex];
+      if (track?.apple_music_id) {
+        player.crossfadeTo(track.apple_music_id);
+      }
     }
   }, [currentTrackIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePlayPause = (track: Track, index: number) => {
+    if (!track.apple_music_id) return;
+
     if (playingTrackId === track.track_id) {
-      // Pause/resume current track
       if (player.isPlaying) {
         player.pause();
       } else {
         player.resume();
       }
     } else {
-      // Play different track with crossfade
-      const target = getPlaybackTarget(track);
-      if (target) {
-        isManualActionRef.current = true;
-        setCurrentTrackIndex(index);
-        player.crossfadeTo(target).catch((err) => {
-          console.error('Error playing track:', err);
-        });
-      }
+      isManualActionRef.current = true;
+      setCurrentTrackIndex(index);
+      player.crossfadeTo(track.apple_music_id).catch((err) => {
+        console.error('Error playing track:', err);
+      });
     }
   };
 
   const handleSkipNext = () => {
     const nextIndex = currentTrackIndex + 1;
     if (nextIndex < tracks.length) {
-      const target = getPlaybackTarget(tracks[nextIndex]);
-      if (target) {
+      const track = tracks[nextIndex];
+      if (track?.apple_music_id) {
         isManualActionRef.current = true;
         setCurrentTrackIndex(nextIndex);
-        player.crossfadeTo(target).catch((err) => {
+        player.crossfadeTo(track.apple_music_id).catch((err) => {
           console.error('Error skipping to next:', err);
         });
       }
@@ -137,17 +98,10 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
-  // Check if a track is playable (SDK can play all, preview needs preview_url)
-  const isPlayable = (track: Track): boolean => {
-    if (useSDK) return true;
-    return !!track.preview_url;
-  };
-
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Header */}
       <div style={{ padding: '24px', paddingBottom: 0 }}>
-        {/* Back Button */}
         <button
           onClick={onBack}
           style={{
@@ -171,7 +125,6 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
           color: 'rgba(255, 255, 255, 0.35)',
         }}>
           cluster {clusterId} · {bpm} BPM · {tracks.length} songs
-          {useSDK && ' · full tracks'}
         </p>
 
         {/* Now Playing & Skip Controls */}
@@ -192,7 +145,6 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
               }}>
                 {currentTrack.name}
               </p>
-              {/* Progress bar */}
               {player.duration > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <div style={{
@@ -209,7 +161,6 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
               )}
             </div>
 
-            {/* Skip Next Button */}
             <motion.button
               onClick={handleSkipNext}
               disabled={currentTrackIndex >= tracks.length - 1}
@@ -307,7 +258,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
 
                 {/* Actions */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {isPlayable(track) && (
+                  {track.apple_music_id && (
                     <motion.button
                       onClick={() => handlePlayPause(track, index)}
                       style={{
@@ -329,22 +280,6 @@ export function SongQueue({ tracks, clusterId, bpm, onBack, isPremium = false }:
                         <Play style={{ width: 16, height: 16 }} />
                       )}
                     </motion.button>
-                  )}
-                  {track.external_urls && (
-                    <motion.a
-                      href={track.external_urls}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        padding: 10, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        background: 'rgba(255, 255, 255, 0.05)', color: 'rgba(255, 255, 255, 0.3)',
-                        textDecoration: 'none',
-                      }}
-                      whileHover={{ scale: 1.1, color: '#FF2D55' }}
-                      whileTap={{ scale: 0.9 }}
-                    >
-                      <ExternalLink style={{ width: 16, height: 16 }} />
-                    </motion.a>
                   )}
                 </div>
               </motion.div>

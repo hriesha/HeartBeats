@@ -66,7 +66,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
       setError(null);
 
       try {
-        const result = await runClustering(paceValue, paceUnit, null);
+        const result = await runClustering(paceValue, paceUnit);
         console.log('Clustering result:', result);
 
         if (result && result.clusters) {

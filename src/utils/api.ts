@@ -3,7 +3,6 @@
  */
 
 const API_ROOT = import.meta.env.VITE_API_URL || "http://localhost:8888";
-// Support either "http://host:port" or "http://host:port/api"
 const API_BASE_URL = API_ROOT.endsWith("/api") ? API_ROOT : `${API_ROOT}/api`;
 
 export interface Cluster {
@@ -27,22 +26,22 @@ export interface Track {
   loudness?: number;
   distance?: number;
   rank?: number;
-  // Spotify API fields
+  // Metadata fields
   id?: string;
   album?: string;
   album_id?: string;
   duration_ms?: number;
-  preview_url?: string;
-  external_urls?: string;
   images?: Array<{ url: string; height: number; width: number }>;
   release_date?: string;
   artist_names?: string;
+  // Apple Music
+  apple_music_id?: string;
 }
 
 export interface ClusteringResponse {
   clusters: Cluster[];
   total_tracks?: number;
-  message?: string;  // Optional message when no clusters found
+  message?: string;
 }
 
 export interface ClusterTracksResponse {
@@ -68,151 +67,22 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
-// =============================================================================
-// Spotify OAuth Functions
-// =============================================================================
-
 /**
- * Spotify user profile returned from /api/spotify/status
- */
-export interface SpotifyUser {
-  id: string;
-  display_name: string;
-  email?: string;
-  product?: string;  // "premium" or "free"
-  images?: Array<{ url: string }>;
-}
-
-/**
- * Response from /api/spotify/status
- */
-export interface SpotifyStatus {
-  connected: boolean;
-  user?: SpotifyUser;
-  error?: string;
-}
-
-/**
- * Check if user is authenticated with Spotify.
- * Call this on app load to see if we can skip the login screen.
- *
- * Returns { connected: true, user: {...} } if authenticated,
- * or { connected: false } if not.
- */
-export async function checkSpotifyStatus(): Promise<SpotifyStatus> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/spotify/status`);
-    const data = await response.json();
-    return {
-      connected: data.connected || false,
-      user: data.user,
-      error: data.error
-    };
-  } catch (error) {
-    console.error('Spotify status check failed:', error);
-    return { connected: false, error: String(error) };
-  }
-}
-
-/**
- * Get the Spotify OAuth authorization URL.
- * Frontend should redirect the user to this URL to start the login flow.
- *
- * After the user logs in on Spotify, they'll be redirected back to
- * /api/spotify/callback, which then redirects to the frontend with
- * ?spotify_connected=true or ?spotify_error=...
- */
-export async function getSpotifyAuthUrl(): Promise<string | null> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/spotify/auth-url`);
-    const data = await response.json();
-    if (data.success && data.auth_url) {
-      return data.auth_url;
-    }
-    console.error('Failed to get Spotify auth URL:', data.error);
-    return null;
-  } catch (error) {
-    console.error('Failed to get Spotify auth URL:', error);
-    return null;
-  }
-}
-
-/**
- * Log out of Spotify (clear cached token on backend).
- * After this, user will need to re-authorize on next visit.
- */
-export async function logoutSpotify(): Promise<boolean> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/spotify/logout`, {
-      method: 'POST'
-    });
-    const data = await response.json();
-    return data.success || false;
-  } catch (error) {
-    console.error('Spotify logout failed:', error);
-    return false;
-  }
-}
-
-/**
- * Response from /api/spotify/token
- */
-export interface SpotifyTokenResponse {
-  success: boolean;
-  access_token?: string;
-  expires_in?: number;
-  error?: string;
-}
-
-/**
- * Get a fresh Spotify access token for the Web Playback SDK.
- * The backend handles token refresh automatically.
- */
-export async function getSpotifyToken(): Promise<SpotifyTokenResponse> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/spotify/token`);
-    const data = await response.json();
-    return {
-      success: data.success || false,
-      access_token: data.access_token,
-      expires_in: data.expires_in,
-      error: data.error,
-    };
-  } catch (error) {
-    console.error('Failed to get Spotify token:', error);
-    return { success: false, error: String(error) };
-  }
-}
-
-/**
- * Run clustering on user's tracks using recs model
- * @param paceValue - Pace value (e.g., 10.0 for 10:00 min/mile)
- * @param paceUnit - Pace unit ('min/mile' or 'min/km')
- * @param nClusters - Number of clusters (null/undefined for auto-determination)
+ * Run clustering on tracks
  */
 export async function runClustering(
   paceValue: number,
   paceUnit: 'min/mile' | 'min/km',
-  nClusters: number | null = null
 ): Promise<ClusteringResponse | null> {
   try {
-    // Use recs model by default - it converts pace to BPM automatically
-    // Clusters tracks from the dataset (not user's library)
     const body: any = {
-      use_recs_model: true,
       pace_value: paceValue,
       pace_unit: paceUnit,
     };
-    // Only include n_clusters if explicitly provided (not null)
-    if (nClusters !== null && nClusters !== undefined) {
-      body.n_clusters = nClusters;
-    }
 
     const response = await fetch(`${API_BASE_URL}/clusters`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
 
@@ -238,14 +108,11 @@ export async function runClustering(
       throw new Error(raw?.error || raw?.message || "Clustering failed");
     }
 
-    // Empty clusters array is valid (no tracks match the filter)
     if (!Array.isArray(raw?.clusters)) {
       throw new Error(raw?.error || raw?.message || "Invalid response format: clusters is not an array");
     }
-    
-    // If clusters is empty, include the message in the response
+
     if (raw?.clusters.length === 0 && raw?.message) {
-      // Return clusters array but include message for frontend to display
       return { clusters: [], total_tracks: raw?.total_tracks ?? 0, message: raw.message };
     }
 
@@ -342,11 +209,13 @@ export async function getClusterTracks(
 export async function getTracksFromTrack(
   trackId: string,
   clusterId?: number,
-  topk: number = 10
+  topk: number = 10,
+  excludeIds?: string[],
 ): Promise<ClusterTracksResponse | null> {
   try {
     const body: Record<string, unknown> = { track_id: trackId, topk };
     if (clusterId != null) body.cluster_id = clusterId;
+    if (excludeIds?.length) body.exclude_ids = excludeIds;
     const response = await fetch(`${API_BASE_URL}/tracks/from-track`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -370,120 +239,14 @@ export async function getTracksFromTrack(
 }
 
 /**
- * Start playback on user's active device. Requires Spotify OAuth.
- */
-export async function startPlayback(uris: string[]): Promise<{ success: boolean; error?: string }> {
-  try {
-    const r = await fetch(`${API_BASE_URL}/playback/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uris }),
-    });
-    const d = await r.json();
-    return { success: !!d?.success, error: d?.error };
-  } catch (e) {
-    return { success: false, error: String(e) };
-  }
-}
-
-/**
- * Add track to playback queue. Requires Spotify OAuth.
- */
-export async function addToQueue(uri: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    const r = await fetch(`${API_BASE_URL}/playback/queue`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uri }),
-    });
-    const d = await r.json();
-    return { success: !!d?.success, error: d?.error };
-  } catch (e) {
-    return { success: false, error: String(e) };
-  }
-}
-
-/**
- * Recs model coverage: how many of the user's saved tracks are in the recs lookup.
- * Call after Spotify is connected. Returns total_saved, in_lookup, coverage_pct, by_cluster, samples.
- */
-export async function getRecsCoverage(): Promise<{
-  success: boolean;
-  total_saved?: number;
-  in_lookup?: number;
-  not_in_lookup?: number;
-  coverage_pct?: number;
-  by_cluster?: Record<string, number>;
-  sample_in_lookup?: string[];
-  sample_not_in_lookup?: string[];
-  error?: string;
-} | null> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/recs/coverage`, { method: "GET" });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Recs coverage failed");
-    return data;
-  } catch (e) {
-    console.error("getRecsCoverage error:", e);
-    return null;
-  }
-}
-
-/**
- * Run clustering using the recs model (pre-trained clusters from track_id only).
- * No Anna's Archive needed; uses user's Spotify library and recs lookup.
- */
-export async function runClusteringWithRecs(bpm?: number): Promise<ClusteringResponse | null> {
-  try {
-    const body: { use_recs_model: boolean; use_spotify_library: boolean; bpm?: number } = {
-      use_recs_model: true,
-      use_spotify_library: true,
-    };
-    if (bpm != null) body.bpm = bpm;
-    const response = await fetch(`${API_BASE_URL}/clusters`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || "Recs clustering failed");
-    }
-    const raw = await response.json();
-    if (!raw?.success || !Array.isArray(raw?.clusters))
-      throw new Error(raw?.error || raw?.message || "Recs clustering failed");
-    const colors = ["#EAE2B7", "#FCBF49", "#F77F00", "#D62828", "#003049", "#9B59B6", "#2ECC71", "#3498DB"];
-    const clusters: Cluster[] = raw.clusters.map((c: { cluster_id?: number; count?: number; name?: string; color?: string; tags?: string[] }, idx: number) => {
-      const id = Number(c.cluster_id ?? idx);
-      return {
-        id,
-        name: c.name ?? `Vibe ${id}`,
-        color: c.color ?? colors[id % colors.length],
-        tags: Array.isArray(c.tags) ? c.tags : [],
-        mean_tempo: 0,
-        track_count: Number(c.count ?? 0),
-      };
-    });
-    return { clusters, total_tracks: Number(raw.total_tracks ?? 0) };
-  } catch (e) {
-    console.error("runClusteringWithRecs error:", e);
-    return null;
-  }
-}
-
-/**
- * Get detailed track information from Spotify
+ * Get detailed track information
  */
 export async function getTrackDetails(trackIds: string[]): Promise<TrackDetailsResponse | null> {
   try {
     const response = await fetch(`${API_BASE_URL}/tracks/details`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        track_ids: trackIds,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ track_ids: trackIds }),
     });
 
     if (!response.ok) {
@@ -497,4 +260,131 @@ export async function getTrackDetails(trackIds: string[]): Promise<TrackDetailsR
     console.error('Get track details error:', error);
     return null;
   }
+}
+
+// =============================================================================
+// Apple Music ID Resolution
+// =============================================================================
+
+// In-memory cache for resolved Apple Music IDs
+const _appleMusicIdCache = new Map<string, string>();
+
+/**
+ * Resolve a track name + artist to an Apple Music catalog ID.
+ * Uses the MusicKit JS search API (client-side, no backend needed).
+ */
+export async function resolveAppleMusicId(
+  trackName: string,
+  artistName: string
+): Promise<string | null> {
+  const cacheKey = `${trackName}|||${artistName}`.toLowerCase();
+  if (_appleMusicIdCache.has(cacheKey)) {
+    return _appleMusicIdCache.get(cacheKey)!;
+  }
+
+  try {
+    const music = window.MusicKit?.getInstance?.();
+    if (!music) {
+      console.warn('MusicKit not initialized');
+      return null;
+    }
+
+    const query = `${trackName} ${artistName}`.trim();
+    const storefront = music.storefrontId || 'us';
+
+    let songs: any[] | null = null;
+
+    // Try MusicKit JS v3 api.music() first
+    try {
+      if (typeof (music as any).api?.music === 'function') {
+        const result = await (music as any).api.music(
+          `/v1/catalog/${storefront}/search`,
+          { term: query, types: 'songs', limit: 5 }
+        );
+        songs = result?.data?.results?.songs?.data ?? null;
+      }
+    } catch (e) {
+      console.warn('MusicKit api.music() failed, trying direct fetch:', e);
+    }
+
+    // Fallback: direct Apple Music API fetch with developer token
+    if (!songs) {
+      const devToken = import.meta.env.VITE_APPLE_MUSIC_DEVELOPER_TOKEN;
+      const userToken = (music as any).musicUserToken || '';
+      if (devToken) {
+        const params = new URLSearchParams({ term: query, types: 'songs', limit: '5' });
+        const headers: Record<string, string> = { Authorization: `Bearer ${devToken}` };
+        if (userToken) headers['Music-User-Token'] = userToken;
+        const resp = await fetch(
+          `https://api.music.apple.com/v1/catalog/${storefront}/search?${params}`,
+          { headers }
+        );
+        if (resp.ok) {
+          const json = await resp.json();
+          songs = json?.results?.songs?.data ?? null;
+        }
+      }
+    }
+
+    if (!songs || songs.length === 0) return null;
+
+    // Try exact match first
+    const normalizedName = trackName.toLowerCase().trim();
+    const normalizedArtist = artistName.toLowerCase().trim();
+
+    for (const song of songs) {
+      const sName = (song.attributes?.name || '').toLowerCase().trim();
+      const sArtist = (song.attributes?.artistName || '').toLowerCase().trim();
+      if (sName === normalizedName && sArtist.includes(normalizedArtist)) {
+        _appleMusicIdCache.set(cacheKey, song.id);
+        return song.id;
+      }
+    }
+
+    // Fuzzy: name contains match
+    for (const song of songs) {
+      const sName = (song.attributes?.name || '').toLowerCase().trim();
+      if (sName.includes(normalizedName) || normalizedName.includes(sName)) {
+        _appleMusicIdCache.set(cacheKey, song.id);
+        return song.id;
+      }
+    }
+
+    // Fallback: first result
+    const firstId = songs[0].id;
+    _appleMusicIdCache.set(cacheKey, firstId);
+    return firstId;
+  } catch (error) {
+    console.warn('Apple Music search failed for:', trackName, '-', artistName, error);
+    return null;
+  }
+}
+
+/**
+ * Resolve Apple Music IDs for an array of tracks.
+ * Batches requests (5 at a time) to avoid rate limits.
+ * Updates each track's apple_music_id field in-place and returns them.
+ */
+export async function resolveAppleMusicIds(tracks: Track[]): Promise<Track[]> {
+  const BATCH_SIZE = 5;
+
+  for (let i = 0; i < tracks.length; i += BATCH_SIZE) {
+    const batch = tracks.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (track) => {
+        if (track.apple_music_id) return;
+
+        const artistName = track.artist_names || track.artists || '';
+        const trackName = track.name || '';
+        if (!trackName) return;
+
+        const id = await resolveAppleMusicId(trackName, artistName);
+        if (id) {
+          track.apple_music_id = id;
+        }
+      })
+    );
+  }
+
+  return tracks;
 }
