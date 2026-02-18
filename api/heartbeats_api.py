@@ -171,32 +171,33 @@ def _fetch_vibe_tracks(
     candidates = list(all_tracks.items())
     candidates.sort(key=lambda x: -(x[1].get("rank", 0) or 0))
 
-    # Quick BPM check: use Deezer metadata (instant, no librosa)
-    # For tracks with BPM 0 (most popular songs), just use target BPM —
-    # they're from genre charts/BPM search so they're appropriate
-    result = []
+    # Step 1: Pick top tracks by popularity + artist diversity (no BPM check yet)
+    shortlist = []
     artist_count: Dict[str, int] = {}
     MAX_PER_ARTIST = 2
 
     for tid, dt in candidates:
-        # Try Deezer metadata BPM first (instant, cached)
-        detail = _deezer.get_track_detail(tid)
-        meta_bpm = detail.get("bpm", 0) if detail else 0
-
-        if meta_bpm and meta_bpm > 0:
-            # Has real BPM — check if in range
-            if abs(meta_bpm - target_bpm) > BPM_TOLERANCE:
-                continue
-            actual_bpm = float(meta_bpm)
-        else:
-            # No BPM metadata — trust genre chart / BPM search placement
-            actual_bpm = target_bpm
-
         artist_name = dt.get("artist", {}).get("name", "").lower()
         if artist_count.get(artist_name, 0) >= MAX_PER_ARTIST:
             continue
-
         artist_count[artist_name] = artist_count.get(artist_name, 0) + 1
+        shortlist.append((tid, dt))
+        if len(shortlist) >= limit + 10:  # grab extras in case some fail BPM
+            break
+
+    # Step 2: Batch-fetch real BPMs for shortlisted tracks only
+    shortlist_ids = [tid for tid, _ in shortlist]
+    bpm_map = _deezer.batch_get_track_bpms(shortlist_ids)
+
+    # Step 3: Build final result with real BPMs
+    result = []
+    for tid, dt in shortlist:
+        actual_bpm = bpm_map.get(tid)
+        if actual_bpm and abs(actual_bpm - target_bpm) > BPM_TOLERANCE:
+            continue  # real BPM out of range
+        if not actual_bpm:
+            actual_bpm = target_bpm  # fallback for tracks where detection failed
+
         result.append(_deezer_track_to_heartbeats(
             dt, vibe_id, bpm=actual_bpm
         ))
