@@ -138,9 +138,8 @@ def _fetch_vibe_tracks(
     all_tracks: Dict[int, Dict] = {}  # dedup by Deezer track ID
     bpm_search_ids: set = set()  # tracks from BPM-filtered search (already in range)
 
-    # Source 1: Chart tracks — use random offset for variety
-    chart_offset = random.choice([0, 0, 25, 50])
-    chart_tracks = _deezer.get_chart_tracks(genre_id, limit=50, index=chart_offset)
+    # Source 1: Chart tracks (most popular first)
+    chart_tracks = _deezer.get_chart_tracks(genre_id, limit=50)
     for dt in chart_tracks:
         tid = dt.get("id")
         if tid and tid not in all_tracks:
@@ -151,9 +150,8 @@ def _fetch_vibe_tracks(
     all_keywords = vibe.get("search_keywords", [])
     picked_keywords = random.sample(all_keywords, min(2, len(all_keywords)))
     for keyword in picked_keywords:
-        search_offset = random.randint(0, 40)
         results, _ = _deezer.search_tracks_by_bpm(
-            keyword, bpm_min, bpm_max, limit=40, index=search_offset
+            keyword, bpm_min, bpm_max, limit=40
         )
         for dt in results:
             tid = dt.get("id")
