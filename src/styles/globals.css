@@ -155,3 +155,33 @@
 html {
   font-size: var(--font-size);
 }
+
+/* iOS Safe Areas */
+:root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Prevent iOS overscroll bounce showing white */
+html, body {
+  background-color: #0a0a0a;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Native feel: no text selection except inputs */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Remove tap highlight on all elements */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
