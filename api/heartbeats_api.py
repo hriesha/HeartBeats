@@ -36,7 +36,12 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 log = logging.getLogger("heartbeats_api")
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+    "capacitor://localhost",
+    "*",
+])
 
 BPM_TOLERANCE = 15
 
@@ -486,7 +491,7 @@ def not_found(error):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8888))
-    host = "127.0.0.1"
+    host = os.environ.get("HOST", "0.0.0.0")
     print(f"\n🚀 HeartBeats API Server (Deezer-powered)")
     print(f"📍 Running on http://{host}:{port}")
     print(f"🔗 Health check: http://localhost:{port}/api/health")
