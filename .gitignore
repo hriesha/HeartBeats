@@ -44,6 +44,11 @@ annas_archive_data/
 __pycache__/
 *.pyc
 
+# Xcode user data
+xcuserdata/
+*.xcuserdatad/
+HeartBeatsXcode.xcodeproj/
+
 # Generated datasets and model artifacts
 enriched_kaggle.csv
 merged_with_archive.csv
