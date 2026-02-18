@@ -66,8 +66,8 @@ export function useMusicKitPlayer(
   const crossfadeTimerRef = useRef<number | null>(null);
   const positionIntervalRef = useRef<number | null>(null);
   const trackEndCheckRef = useRef<number | null>(null);
-  const fadeOutDurationRef = useRef(Math.round(initialCrossfadeDuration * 0.6));
-  const fadeInDurationRef = useRef(Math.round(initialCrossfadeDuration * 0.4));
+  const fadeOutDurationRef = useRef(Math.round(initialCrossfadeDuration * 0.65));
+  const fadeInDurationRef = useRef(Math.round(initialCrossfadeDuration * 0.35));
 
   useEffect(() => { onTrackEndRef.current = onTrackEnd; }, [onTrackEnd]);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
@@ -205,19 +205,34 @@ export function useMusicKitPlayer(
     if (!music) throw new Error('MusicKit not ready');
 
     await music.setQueue({ song: appleMusicId });
-    await music.play();
+    try {
+      await music.play();
+    } catch (err: any) {
+      // Suppress browser autoplay policy errors (user hasn't interacted yet)
+      const msg = err?.message || String(err);
+      if (msg.includes('not allowed') || msg.includes('user denied') || msg.includes('NotAllowedError')) {
+        console.warn('Autoplay blocked — user needs to tap play');
+        return;
+      }
+      throw err;
+    }
   }, []);
 
-  // Smooth crossfade: fade current track down, switch at low volume, fade new track up.
-  // The switch happens at ~15% volume so the gap is imperceptible — feels like an overlap.
+  // Easing functions for natural-sounding volume transitions
+  // Human hearing is logarithmic, so linear volume changes sound abrupt.
+  const easeInCubic = (t: number) => t * t * t;
+  const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
+  // Smooth crossfade: fade current track down, switch at near-silence, fade new track up.
+  // Uses cubic easing curves so the fade sounds gradual and natural.
   const smoothCrossfade = useCallback((appleMusicId: string): Promise<void> => {
     return new Promise((resolve, reject) => {
       const music = musicRef.current;
       if (!music) { reject(new Error('MusicKit not ready')); return; }
 
       const totalMs = fadeOutDurationRef.current + fadeInDurationRef.current;
-      // Switch point: 40% through the total duration (when volume is low)
-      const switchAt = 0.4;
+      // Switch at 55% — volume is nearly silent by this point
+      const switchAt = 0.55;
       const startVolume = masterVolumeRef.current;
       const startTime = Date.now();
       let switched = false;
@@ -227,10 +242,11 @@ export function useMusicKitPlayer(
         const progress = Math.min(elapsed / totalMs, 1);
 
         if (progress < switchAt) {
-          // Phase 1: Fade out current track
-          // Map 0→switchAt to 1→~0.15 with an ease-in curve
+          // Phase 1: Fade out current track with ease-in curve
+          // Starts slow (barely noticeable), accelerates toward silence
           const fadeProgress = progress / switchAt;
-          const vol = startVolume * (1 - fadeProgress * 0.85); // down to 15%
+          const easedProgress = easeInCubic(fadeProgress);
+          const vol = startVolume * (1 - easedProgress * 0.97); // down to 3%
           music.volume = Math.max(0.01, vol);
         } else {
           // Phase 2: Switch track once, then fade in
@@ -239,15 +255,16 @@ export function useMusicKitPlayer(
             try {
               music.volume = 0.01;
               await startPlaybackById(appleMusicId);
-              music.volume = startVolume * 0.15;
+              music.volume = startVolume * 0.03;
             } catch (err) {
               reject(err);
               return;
             }
           }
-          // Fade from 15% up to full volume
+          // Fade in with ease-out curve: rises quickly then settles
           const fadeProgress = (progress - switchAt) / (1 - switchAt);
-          const vol = startVolume * (0.15 + fadeProgress * 0.85);
+          const easedProgress = easeOutCubic(fadeProgress);
+          const vol = startVolume * (0.03 + easedProgress * 0.97);
           music.volume = Math.min(startVolume, vol);
         }
 
@@ -354,8 +371,8 @@ export function useMusicKitPlayer(
 
   const setCrossfadeDuration = useCallback((ms: number) => {
     const safe = Math.max(0, ms);
-    fadeOutDurationRef.current = Math.round(safe * 0.6);
-    fadeInDurationRef.current = Math.round(safe * 0.4);
+    fadeOutDurationRef.current = Math.round(safe * 0.65);
+    fadeInDurationRef.current = Math.round(safe * 0.35);
   }, []);
 
   const cleanup = useCallback(() => {
