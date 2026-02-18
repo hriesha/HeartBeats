@@ -15,7 +15,7 @@ export function TrackerConnected({ onComplete }: TrackerConnectedProps) {
   }, [onComplete]);
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 24px' }}>
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 'calc(48px + var(--safe-area-top)) 24px calc(48px + var(--safe-area-bottom))' }}>
       {/* Success Icon */}
       <motion.div
         style={{ position: 'relative', marginBottom: 32 }}

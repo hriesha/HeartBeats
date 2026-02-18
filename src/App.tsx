@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { StatusBar, Style } from '@capacitor/status-bar';
 import { GlowingArcs } from './components/GlowingArcs';
 import { CursorTrail } from './components/CursorTrail';
 import { AppleMusicConnect } from './components/AppleMusicConnect';
@@ -24,6 +26,14 @@ export default function App() {
   const [paceValue, setPaceValue] = useState(10.0);
   const [paceUnit, setPaceUnit] = useState<'min/mile' | 'min/km'>('min/mile');
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
+
+  // Configure native status bar
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setStyle({ style: Style.Dark });
+      StatusBar.setBackgroundColor({ color: '#0a0a0a' });
+    }
+  }, []);
 
   // On mount: Check if MusicKit is already authorized
   useEffect(() => {
@@ -135,10 +145,10 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0a0a', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ minHeight: '100dvh', background: '#0a0a0a', position: 'relative', overflow: 'hidden' }}>
       <GlowingArcs />
-      <CursorTrail />
-      <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
+      {!Capacitor.isNativePlatform() && <CursorTrail />}
+      <div style={{ position: 'relative', zIndex: 1, minHeight: '100dvh' }}>
         {currentScreen === 'loading' && (
           <div className="w-full h-full flex items-center justify-center" style={{ minHeight: '100vh' }}>
             <div className="text-center">

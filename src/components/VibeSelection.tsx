@@ -112,7 +112,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
   // Loading state
   if (isLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 24px' }}>
+      <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 'calc(48px + var(--safe-area-top)) 24px calc(48px + var(--safe-area-bottom))' }}>
         <motion.div
           style={{ width: 40, height: 40, border: '2px solid #FF2D55', borderTopColor: 'transparent', borderRadius: '50%' }}
           animate={{ rotate: 360 }}
@@ -128,11 +128,11 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
   // Error state
   if (error) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 24px', position: 'relative' }}>
+      <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 'calc(48px + var(--safe-area-top)) 24px calc(48px + var(--safe-area-bottom))', position: 'relative' }}>
         <button
           onClick={onBack}
           style={{
-            position: 'absolute', top: 20, left: 20, width: 40, height: 40, borderRadius: '50%',
+            position: 'absolute', top: 'calc(20px + var(--safe-area-top))', left: 20, width: 44, height: 44, borderRadius: '50%',
             background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)',
             color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
           }}
@@ -160,7 +160,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
   // Empty state
   if (clusters.length === 0) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <p style={{ fontFamily: 'var(--font-body)', fontSize: '15px', color: 'rgba(255,255,255,0.4)' }}>
           no vibes found
         </p>
@@ -173,7 +173,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
   const layout = bubbleLayouts[layoutIndex];
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       {/* Zoom Transition */}
       {isTransitioning && selectedVibe && (
         <motion.div
@@ -194,7 +194,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
       <button
         onClick={onBack}
         style={{
-          position: 'absolute', top: 20, left: 20, width: 40, height: 40, borderRadius: '50%',
+          position: 'absolute', top: 'calc(20px + var(--safe-area-top))', left: 20, width: 44, height: 44, borderRadius: '50%',
           background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)',
           color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
           cursor: 'pointer', zIndex: 10,
@@ -204,7 +204,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
       </button>
 
       {/* Header */}
-      <div style={{ padding: '72px 24px 0', zIndex: 2 }}>
+      <div style={{ padding: 'calc(72px + var(--safe-area-top)) 24px 0', zIndex: 2 }}>
         <p style={{ fontFamily: 'var(--font-body)', fontSize: '12px', color: '#FF2D55', fontWeight: 400, marginBottom: 8, letterSpacing: '0.05em' }}>
           {paceValue ? `${Math.floor(paceValue)}:${Math.round((paceValue % 1) * 60).toString().padStart(2, '0')} ${paceUnit}` : `${bpm} bpm`}
         </p>
@@ -217,7 +217,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
       </div>
 
       {/* Floating Bubbles Area */}
-      <div style={{ flex: 1, position: 'relative', minHeight: '450px' }}>
+      <div style={{ flex: 1, position: 'relative', minHeight: '380px' }}>
         {clusters.slice(0, 5).map((cluster, index) => {
           const colorSet = vibeColors[index % vibeColors.length];
           const pos = layout[index] || layout[layout.length - 1];
@@ -298,7 +298,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
       </div>
 
       {/* Bottom hint */}
-      <div style={{ textAlign: 'center', padding: '0 24px 24px', zIndex: 2 }}>
+      <div style={{ textAlign: 'center', padding: '0 24px calc(24px + var(--safe-area-bottom))', zIndex: 2 }}>
         <p style={{ fontFamily: 'var(--font-body)', fontSize: '12px', color: 'rgba(255,255,255,0.2)', fontWeight: 300 }}>
           {clusters.length} moods matched to your pace
         </p>

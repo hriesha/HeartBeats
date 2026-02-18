@@ -99,13 +99,13 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Header */}
-      <div style={{ padding: '24px', paddingBottom: 0 }}>
+      <div style={{ padding: 'calc(24px + var(--safe-area-top)) 24px 0' }}>
         <button
           onClick={onBack}
           style={{
-            width: 40, height: 40, borderRadius: '50%',
+            width: 44, height: 44, borderRadius: '50%',
             background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)',
             color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
             cursor: 'pointer', marginBottom: 20,
@@ -165,7 +165,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
               onClick={handleSkipNext}
               disabled={currentTrackIndex >= tracks.length - 1}
               style={{
-                marginLeft: 12, padding: 10, borderRadius: '50%', border: 'none',
+                marginLeft: 12, padding: 10, borderRadius: '50%', border: 'none', minWidth: 44, minHeight: 44,
                 background: 'rgba(255, 45, 85, 0.15)', color: '#FF2D55',
                 cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
                 opacity: currentTrackIndex >= tracks.length - 1 ? 0.4 : 1,
@@ -180,7 +180,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
       </div>
 
       {/* Song List */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', padding: '20px 24px calc(24px + var(--safe-area-bottom))', display: 'flex', flexDirection: 'column', gap: 8 }}>
         {tracks.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px 0' }}>
             <Music style={{ width: 48, height: 48, color: 'rgba(255, 45, 85, 0.2)', margin: '0 auto 16px' }} />
@@ -263,7 +263,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                       onClick={() => handlePlayPause(track, index)}
                       style={{
                         padding: 10, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         background: playingTrackId === track.track_id && player.isPlaying
                           ? '#FF2D55'
                           : 'rgba(255, 45, 85, 0.12)',

@@ -33,16 +33,16 @@ export function PaceSelection({ onSubmit, onChooseWorkout, onBack }: PaceSelecti
   const maxValue = paceUnit === 'min/mile' ? 15.0 : 9.3;
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', padding: '24px', position: 'relative' }}>
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', padding: 'calc(24px + var(--safe-area-top)) 24px calc(24px + var(--safe-area-bottom))', position: 'relative' }}>
       {/* Back Button */}
       <button
         onClick={onBack}
         style={{
           position: 'absolute',
-          top: 20,
+          top: 'calc(20px + var(--safe-area-top))',
           left: 20,
-          width: 40,
-          height: 40,
+          width: 44,
+          height: 44,
           borderRadius: '50%',
           background: 'rgba(255, 255, 255, 0.05)',
           border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -57,7 +57,7 @@ export function PaceSelection({ onSubmit, onChooseWorkout, onBack }: PaceSelecti
       </button>
 
       {/* Header */}
-      <div style={{ marginTop: 56, marginBottom: 32 }}>
+      <div style={{ marginTop: 40, marginBottom: 32 }}>
         <h1
           style={{
             fontFamily: 'var(--font-heading)',
@@ -176,16 +176,16 @@ export function PaceSelection({ onSubmit, onChooseWorkout, onBack }: PaceSelecti
           <style>{`
             input[type="range"]::-webkit-slider-thumb {
               appearance: none;
-              width: 20px;
-              height: 20px;
+              width: 28px;
+              height: 28px;
               border-radius: 50%;
               background: #FF2D55;
               cursor: pointer;
               box-shadow: 0 0 0 4px rgba(255, 45, 85, 0.15), 0 0 20px rgba(255, 45, 85, 0.3);
             }
             input[type="range"]::-moz-range-thumb {
-              width: 20px;
-              height: 20px;
+              width: 28px;
+              height: 28px;
               border-radius: 50%;
               background: #FF2D55;
               cursor: pointer;

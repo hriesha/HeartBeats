@@ -17,16 +17,16 @@ const workouts = [
 
 export function WorkoutSelection({ onWorkoutSelect, onBack }: WorkoutSelectionProps) {
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', padding: '24px', position: 'relative' }}>
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', padding: 'calc(24px + var(--safe-area-top)) 24px calc(24px + var(--safe-area-bottom))', position: 'relative' }}>
       {/* Back Button */}
       <button
         onClick={onBack}
         style={{
           position: 'absolute',
-          top: 20,
+          top: 'calc(20px + var(--safe-area-top))',
           left: 20,
-          width: 40,
-          height: 40,
+          width: 44,
+          height: 44,
           borderRadius: '50%',
           background: 'rgba(255, 255, 255, 0.05)',
           border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -41,7 +41,7 @@ export function WorkoutSelection({ onWorkoutSelect, onBack }: WorkoutSelectionPr
       </button>
 
       {/* Header */}
-      <div style={{ marginTop: 56, marginBottom: 32 }}>
+      <div style={{ marginTop: 40, marginBottom: 32 }}>
         <h1
           style={{
             fontFamily: 'var(--font-heading)',
