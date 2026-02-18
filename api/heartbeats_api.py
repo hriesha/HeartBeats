@@ -11,6 +11,8 @@ import os
 import sys
 import logging
 import math
+import random
+import time
 from typing import List, Dict, Any, Optional
 
 from flask import Flask, request, jsonify
@@ -43,13 +45,14 @@ CORS(app, origins=[
     "*",
 ])
 
-BPM_TOLERANCE = 15
+BPM_TOLERANCE = 10
 
 # Module-level Deezer client (singleton)
 _deezer = DeezerClient()
 
-# Cache: "vibe_id:bpm" -> list of tracks
-_vibe_tracks_cache: Dict[str, List[Dict]] = {}
+# Cache: "vibe_id:bpm" -> (timestamp, list of tracks)
+_vibe_tracks_cache: Dict[str, tuple] = {}
+_VIBE_CACHE_TTL = 300  # 5 min — keeps BPM analysis cached but rotates songs
 
 
 # =============================================================================
@@ -123,9 +126,9 @@ def _fetch_vibe_tracks(
     Fetch tracks for a vibe (genre) at the given BPM.
 
     Sources:
-    1. Chart tracks for the genre (popular, recent)
-    2. BPM-filtered search using vibe keywords
-    3. Top tracks from genre's top artists (if pool is thin)
+    1. Chart tracks for the genre (popular, recent) — random offset
+    2. BPM-filtered search using randomly picked keywords + random offsets
+    3. Top tracks from genre's top artists (randomized selection)
     """
     vibe_id = vibe["vibe_id"]
     genre_id = vibe["genre_id"]
@@ -133,72 +136,74 @@ def _fetch_vibe_tracks(
     bpm_max = int(target_bpm + BPM_TOLERANCE)
 
     all_tracks: Dict[int, Dict] = {}  # dedup by Deezer track ID
-    search_track_ids: set = set()
 
-    # Source 1: Chart tracks for this genre
-    chart_tracks = _deezer.get_chart_tracks(genre_id, limit=50)
+    # Source 1: Chart tracks — use random offset for variety
+    chart_offset = random.choice([0, 0, 25, 50])
+    chart_tracks = _deezer.get_chart_tracks(genre_id, limit=50, index=chart_offset)
     for dt in chart_tracks:
         tid = dt.get("id")
         if tid and tid not in all_tracks:
             all_tracks[tid] = dt
 
-    # Source 2: BPM-filtered search
-    for keyword in vibe.get("search_keywords", [])[:2]:
+    # Source 2: BPM-filtered search — pick 3 random keywords, random offsets
+    all_keywords = vibe.get("search_keywords", [])
+    picked_keywords = random.sample(all_keywords, min(3, len(all_keywords)))
+    for keyword in picked_keywords:
+        search_offset = random.randint(0, 40)
         results, _ = _deezer.search_tracks_by_bpm(
-            keyword, bpm_min, bpm_max, limit=40
+            keyword, bpm_min, bpm_max, limit=40, index=search_offset
         )
         for dt in results:
             tid = dt.get("id")
-            if tid:
-                search_track_ids.add(tid)
-                if tid not in all_tracks:
-                    all_tracks[tid] = dt
+            if tid and tid not in all_tracks:
+                all_tracks[tid] = dt
 
-    # Source 3: Top artist tracks (fill when thin)
-    if len(all_tracks) < limit:
-        genre_artists = _deezer.get_genre_artists(genre_id)
-        for artist in genre_artists[:3]:
-            artist_tracks = _deezer.get_artist_top_tracks(artist["id"], limit=10)
+    # Source 3: Top artist tracks — pick random artists
+    genre_artists = _deezer.get_genre_artists(genre_id)
+    if genre_artists:
+        picked_artists = random.sample(genre_artists, min(4, len(genre_artists)))
+        for artist in picked_artists:
+            artist_tracks = _deezer.get_artist_top_tracks(artist["id"], limit=15)
             for dt in artist_tracks:
                 tid = dt.get("id")
                 if tid and tid not in all_tracks:
                     all_tracks[tid] = dt
 
-    # Fetch BPM for chart tracks (not from BPM-filtered search)
-    chart_ids = [dt["id"] for dt in chart_tracks[:15] if dt["id"] in all_tracks]
-    bpm_map = _deezer.batch_get_track_bpms(chart_ids)
+    # Sort candidates by Deezer rank (popularity), take top pool
+    candidates = list(all_tracks.items())
+    candidates.sort(key=lambda x: -(x[1].get("rank", 0) or 0))
+    # Fetch BPM for top 50 candidates (cached 24h, so fast on repeat)
+    pool_ids = [tid for tid, _ in candidates[:50]]
+    bpm_map = _deezer.batch_get_track_bpms(pool_ids)
 
-    # Build result
+    # Build result — BPM within ±tolerance, max 2 songs per artist
     result = []
-    for tid, dt in all_tracks.items():
-        track_bpm = bpm_map.get(tid)
-        from_search = tid in search_track_ids
+    artist_count: Dict[str, int] = {}
+    MAX_PER_ARTIST = 2
 
-        if from_search:
-            # Trust Deezer's server-side BPM filter
-            result.append(_deezer_track_to_heartbeats(
-                dt, vibe_id, bpm=track_bpm or target_bpm
-            ))
-        elif track_bpm and abs(track_bpm - target_bpm) <= BPM_TOLERANCE:
-            result.append(_deezer_track_to_heartbeats(
-                dt, vibe_id, bpm=track_bpm
-            ))
-        elif not track_bpm and from_search:
-            result.append(_deezer_track_to_heartbeats(
-                dt, vibe_id, bpm=target_bpm
-            ))
-        else:
-            # Chart track without BPM — include for freshness
-            result.append(_deezer_track_to_heartbeats(
-                dt, vibe_id, bpm=track_bpm or target_bpm
-            ))
+    for tid, dt in candidates:
+        actual_bpm = bpm_map.get(tid)
+        if not actual_bpm or abs(actual_bpm - target_bpm) > BPM_TOLERANCE:
+            continue
 
-    # Sort by Deezer rank (higher = more popular), then trim
-    result.sort(key=lambda t: -(t.get("rank") or 0))
-    for i, track in enumerate(result[:limit], start=1):
+        artist_name = dt.get("artist", {}).get("name", "").lower()
+        if artist_count.get(artist_name, 0) >= MAX_PER_ARTIST:
+            continue
+
+        artist_count[artist_name] = artist_count.get(artist_name, 0) + 1
+        result.append(_deezer_track_to_heartbeats(
+            dt, vibe_id, bpm=actual_bpm
+        ))
+        if len(result) >= limit:
+            break
+
+    # Shuffle to avoid same order every time
+    random.shuffle(result)
+
+    for i, track in enumerate(result, start=1):
         track["rank"] = i
 
-    return result[:limit]
+    return result
 
 
 # =============================================================================
@@ -310,15 +315,16 @@ def get_tracks():
             vibes = get_vibes_for_bpm(target_bpm)
             vibe = vibes[0] if vibes else VIBE_DEFINITIONS[0]
 
-        # Check cache
+        # Check cache (with TTL)
         cache_key = f"{vibe['vibe_id']}:{int(target_bpm)}"
         cached = _vibe_tracks_cache.get(cache_key)
+        now = time.time()
 
-        if cached and len(cached) >= topk:
-            tracks = cached[:topk]
+        if cached and (now - cached[0]) < _VIBE_CACHE_TTL and len(cached[1]) >= topk:
+            tracks = cached[1][:topk]
         else:
             tracks = _fetch_vibe_tracks(vibe, target_bpm, limit=max(topk, 30))
-            _vibe_tracks_cache[cache_key] = tracks
+            _vibe_tracks_cache[cache_key] = (now, tracks)
             tracks = tracks[:topk]
 
         return jsonify({
