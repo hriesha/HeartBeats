@@ -225,7 +225,9 @@ class DeezerClient:
         try:
             import tempfile
             import os
-            resp = self._session.get(preview_url, timeout=10)
+            import signal
+
+            resp = self._session.get(preview_url, timeout=8)
             if resp.status_code != 200:
                 return None
 
@@ -236,7 +238,8 @@ class DeezerClient:
             try:
                 import librosa
                 import numpy as np
-                audio, sr = librosa.load(tmp_path, sr=22050)
+                # Use mono, lower sample rate for speed
+                audio, sr = librosa.load(tmp_path, sr=11025, mono=True)
                 tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
                 bpm = float(tempo) if not hasattr(tempo, '__len__') else float(tempo[0])
                 return round(bpm, 1) if bpm > 0 else None

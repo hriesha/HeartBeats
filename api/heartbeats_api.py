@@ -172,8 +172,8 @@ def _fetch_vibe_tracks(
     # Sort candidates by Deezer rank (popularity), take top pool
     candidates = list(all_tracks.items())
     candidates.sort(key=lambda x: -(x[1].get("rank", 0) or 0))
-    # Fetch BPM for top 50 candidates (cached 24h, so fast on repeat)
-    pool_ids = [tid for tid, _ in candidates[:50]]
+    # Fetch BPM for top 20 candidates (librosa analysis is slow on small servers)
+    pool_ids = [tid for tid, _ in candidates[:20]]
     bpm_map = _deezer.batch_get_track_bpms(pool_ids)
 
     # Build result — BPM within ±tolerance, max 2 songs per artist
