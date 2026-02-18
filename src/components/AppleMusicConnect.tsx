@@ -1,6 +1,6 @@
 import { motion } from 'motion/react';
 import { Music, AlertCircle } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 interface AppleMusicConnectProps {
   onConnected?: () => void;
@@ -9,31 +9,85 @@ interface AppleMusicConnectProps {
 
 export function AppleMusicConnect({ onConnected, onSkip }: AppleMusicConnectProps) {
   const [isConnecting, setIsConnecting] = useState(false);
+  const [showRetry, setShowRetry] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
+
+  // Manual check — user taps after authorizing in popup
+  const handleCheckConnection = () => {
+    const m = window.MusicKit?.getInstance?.();
+    if (m?.isAuthorized) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+      onConnected?.();
+    } else {
+      setError('Not authorized yet. Please try connecting again.');
+      setIsConnecting(false);
+      setShowRetry(false);
+    }
+  };
 
   const handleConnect = async () => {
     setIsConnecting(true);
+    setShowRetry(false);
     setError(null);
 
+    // Show "I've authorized" button after 5 seconds
+    retryTimerRef.current = setTimeout(() => setShowRetry(true), 5000);
+
     try {
-      const music = window.MusicKit?.getInstance?.();
+      let music = window.MusicKit?.getInstance?.();
       if (!music) {
-        // MusicKit not yet configured — configure it now
         const developerToken = import.meta.env.VITE_APPLE_MUSIC_DEVELOPER_TOKEN;
         if (!developerToken) {
           throw new Error('Missing developer token. Check your .env file.');
         }
-        const instance = await window.MusicKit.configure({
+        music = await window.MusicKit.configure({
           developerToken,
           app: { name: 'HeartBeats', build: '1.0.0' },
         });
-        await instance.authorize();
-      } else {
-        await music.authorize();
       }
 
-      onConnected?.();
+      // Start polling for auth status (WKWebView fix —
+      // authorize() promise may never resolve in Capacitor)
+      let resolved = false;
+      pollRef.current = setInterval(() => {
+        if (resolved) return;
+        const m = window.MusicKit?.getInstance?.();
+        if (m?.isAuthorized) {
+          resolved = true;
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          onConnected?.();
+        }
+      }, 500);
+
+      // Also await the normal authorize() in case it does resolve
+      await music.authorize();
+
+      // If authorize() resolved normally, stop polling and proceed
+      if (!resolved) {
+        resolved = true;
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+        onConnected?.();
+      }
     } catch (err: any) {
+      // Stop polling and timers on error
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+
       console.error('Apple Music auth failed:', err);
       const msg = err?.message || String(err);
       if (msg.includes('cancelled') || msg.includes('denied')) {
@@ -46,15 +100,16 @@ export function AppleMusicConnect({ onConnected, onSkip }: AppleMusicConnectProp
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 24px', position: 'relative' }}>
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 'calc(48px + var(--safe-area-top)) 24px calc(48px + var(--safe-area-bottom))', position: 'relative' }}>
       {/* Skip Button */}
       {onSkip && (
         <button
           onClick={onSkip}
           style={{
             position: 'absolute',
-            top: 20,
+            top: 'calc(20px + var(--safe-area-top))',
             right: 20,
+            minHeight: 44,
             fontFamily: 'var(--font-body)',
             fontSize: '13px',
             color: 'rgba(255,255,255,0.4)',
@@ -171,8 +226,37 @@ export function AppleMusicConnect({ onConnected, onSkip }: AppleMusicConnectProp
         )}
       </motion.button>
 
+      {/* "I've authorized" fallback — appears after 5s if connecting hangs */}
+      {isConnecting && showRetry && (
+        <motion.div
+          style={{ marginTop: 16, width: '100%', maxWidth: '320px', display: 'flex', flexDirection: 'column', gap: 8 }}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <button
+            onClick={handleCheckConnection}
+            style={{
+              width: '100%', padding: '14px 24px', borderRadius: '12px',
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              color: '#ffffff', fontFamily: 'var(--font-body)',
+              fontSize: '14px', fontWeight: 400, cursor: 'pointer',
+              minHeight: 48,
+            }}
+          >
+            i've authorized — continue
+          </button>
+          <p style={{
+            fontFamily: 'var(--font-body)', fontSize: '11px', fontWeight: 300,
+            color: 'rgba(255,255,255,0.3)', textAlign: 'center',
+          }}>
+            tap above if you already allowed access
+          </p>
+        </motion.div>
+      )}
+
       {/* Benefits */}
-      {!error && (
+      {!error && !isConnecting && (
         <motion.div
           style={{ marginTop: 48, width: '100%', maxWidth: '320px' }}
           initial={{ opacity: 0, y: 15 }}
