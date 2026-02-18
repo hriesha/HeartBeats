@@ -1,5 +1,6 @@
 import { motion } from 'motion/react';
-import { ChevronLeft, Play, Pause, Music, SkipForward } from 'lucide-react';
+import { ChevronLeft, Play, Pause, Music, SkipForward, MessageCircle } from 'lucide-react';
+import { FeedbackModal } from './FeedbackModal';
 import { VibeType } from '../App';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getClusterTracks, getTracksFromTrack, resolveAppleMusicIds, Track } from '../utils/api';
@@ -16,6 +17,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
   const [nowPlayingIndex, setNowPlayingIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showFeedback, setShowFeedback] = useState(false);
 
   const clusterId = parseInt(vibe.id.split('-')[1] || '0');
   const tracksRef = useRef<Track[]>([]);
@@ -211,12 +213,29 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
   const nowPlaying = tracks[nowPlayingIndex];
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+    <>
+    <FeedbackModal isOpen={showFeedback} onClose={() => setShowFeedback(false)} />
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      {/* Feedback Button */}
+      <motion.button
+        onClick={() => setShowFeedback(true)}
+        style={{
+          position: 'absolute', top: 'calc(20px + var(--safe-area-top))', right: 20,
+          width: 44, height: 44, borderRadius: '50%', zIndex: 20,
+          background: 'rgba(255, 45, 85, 0.12)', border: '1px solid rgba(255, 45, 85, 0.25)',
+          color: '#FF2D55', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer',
+        }}
+        whileTap={{ scale: 0.9 }}
+      >
+        <MessageCircle style={{ width: 18, height: 18 }} />
+      </motion.button>
+
       {/* Back Button */}
       <button
         onClick={onBack}
         style={{
-          position: 'absolute', top: 20, left: 20, width: 40, height: 40, borderRadius: '50%',
+          position: 'absolute', top: 'calc(20px + var(--safe-area-top))', left: 20, width: 44, height: 44, borderRadius: '50%',
           background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)',
           color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
           cursor: 'pointer', zIndex: 20,
@@ -226,7 +245,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
       </button>
 
       {/* Vibe Header */}
-      <div style={{ paddingTop: 72, paddingBottom: 16, paddingLeft: 24, paddingRight: 24 }}>
+      <div style={{ paddingTop: 'calc(72px + var(--safe-area-top))', paddingBottom: 16, paddingLeft: 24, paddingRight: 24 }}>
         <motion.div
           style={{
             borderRadius: '16px',
@@ -317,7 +336,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
                 else player.resume();
               }}
               style={{
-                marginLeft: 12, padding: 10, borderRadius: '50%',
+                marginLeft: 12, padding: 10, borderRadius: '50%', minWidth: 44, minHeight: 44,
                 background: 'rgba(255, 45, 85, 0.15)', border: 'none',
                 color: '#FF2D55', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
@@ -386,7 +405,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
 
       {/* Track Queue */}
       {!isLoading && !error && tracks.length > 0 && (
-        <div style={{ padding: '0 24px 24px', flex: 1 }}>
+        <div style={{ padding: '0 24px calc(24px + var(--safe-area-bottom))', flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <h2 style={{
               fontFamily: 'var(--font-heading)', fontSize: '18px', fontWeight: 200,
@@ -399,7 +418,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
               disabled={nowPlayingIndex >= tracks.length - 1}
               style={{
                 display: 'flex', alignItems: 'center', gap: 6,
-                padding: '8px 16px', borderRadius: '20px',
+                padding: '8px 16px', borderRadius: '20px', minHeight: 44,
                 background: '#FF2D55', color: '#ffffff', border: 'none',
                 fontFamily: 'var(--font-body)', fontSize: '13px', fontWeight: 500,
                 cursor: 'pointer', opacity: nowPlayingIndex >= tracks.length - 1 ? 0.4 : 1,
@@ -494,8 +513,8 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
                     <motion.button
                       onClick={() => handlePlayPause(track, index)}
                       style={{
-                        padding: 8, borderRadius: '50%', flexShrink: 0, border: 'none', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        padding: 10, borderRadius: '50%', flexShrink: 0, border: 'none', cursor: 'pointer',
+                        minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         background: isNowPlaying && player.isPlaying
                           ? '#FF2D55'
                           : 'rgba(255, 45, 85, 0.12)',
@@ -518,5 +537,6 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
         </div>
       )}
     </div>
+    </>
   );
 }
