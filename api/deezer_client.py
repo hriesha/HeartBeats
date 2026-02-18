@@ -193,11 +193,58 @@ class DeezerClient:
         return tracks
 
     def get_track_bpm(self, track_id: int) -> Optional[float]:
+        """Get BPM for a track. Tries Deezer metadata first, falls back to audio analysis."""
+        # Check BPM cache first
+        cache_key = f"bpm:{track_id}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         detail = self.get_track_detail(track_id)
         if not detail:
             return None
+
+        # Try Deezer's metadata BPM
         bpm = detail.get("bpm", 0)
-        return float(bpm) if bpm and bpm > 0 else None
+        if bpm and bpm > 0:
+            self._cache_set(cache_key, float(bpm), CACHE_TTL_TRACK_DETAIL)
+            return float(bpm)
+
+        # Fallback: detect BPM from 30s audio preview
+        preview_url = detail.get("preview")
+        if preview_url:
+            detected = self._detect_bpm_from_preview(preview_url)
+            if detected:
+                self._cache_set(cache_key, detected, CACHE_TTL_TRACK_DETAIL)
+                return detected
+
+        return None
+
+    def _detect_bpm_from_preview(self, preview_url: str) -> Optional[float]:
+        """Download Deezer 30s preview and detect BPM via audio analysis."""
+        try:
+            import tempfile
+            import os
+            resp = self._session.get(preview_url, timeout=10)
+            if resp.status_code != 200:
+                return None
+
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+                f.write(resp.content)
+                tmp_path = f.name
+
+            try:
+                import librosa
+                import numpy as np
+                audio, sr = librosa.load(tmp_path, sr=22050)
+                tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
+                bpm = float(tempo) if not hasattr(tempo, '__len__') else float(tempo[0])
+                return round(bpm, 1) if bpm > 0 else None
+            finally:
+                os.unlink(tmp_path)
+        except Exception as e:
+            log.warning("BPM detection failed for preview: %s", e)
+            return None
 
     def batch_get_track_bpms(self, track_ids: List[int]) -> Dict[int, float]:
         result: Dict[int, float] = {}
