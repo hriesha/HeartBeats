@@ -3,7 +3,7 @@ import { ChevronLeft, Play, Pause, Music, SkipForward, MessageCircle } from 'luc
 import { FeedbackModal } from './FeedbackModal';
 import { VibeType } from '../App';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getClusterTracks, getTracksFromTrack, resolveAppleMusicIds, Track } from '../utils/api';
+import { getClusterTracks, resolveAppleMusicIds, Track } from '../utils/api';
 import { useMusicKitPlayer } from '../hooks/useMusicKitPlayer';
 
 interface VibeDetailProps {
@@ -22,9 +22,44 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
   const clusterId = parseInt(vibe.id.split('-')[1] || '0');
   const tracksRef = useRef<Track[]>([]);
   const nowPlayingIndexRef = useRef(0);
+  const reserveRef = useRef<Track[]>([]);
+  const fetchingReservesRef = useRef(false);
+  const lastExtendedForRef = useRef<number>(-1);
 
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { nowPlayingIndexRef.current = nowPlayingIndex; }, [nowPlayingIndex]);
+
+  // Fetch a pool of reserve tracks for queue extension
+  const fetchReserves = useCallback(async () => {
+    if (fetchingReservesRef.current) return;
+    fetchingReservesRef.current = true;
+    try {
+      const result = await getClusterTracks(clusterId, bpm, 50);
+      if (!result?.tracks?.length) return;
+      // Filter out tracks already in queue
+      const queueIds = new Set(tracksRef.current.map(t => t.track_id ?? t.id));
+      const fresh = result.tracks.filter(t => !queueIds.has(t.track_id ?? t.id));
+      const resolved = await resolveAppleMusicIds(fresh);
+      reserveRef.current = resolved.filter(t => t.apple_music_id);
+    } catch (err) {
+      console.error('Error fetching reserves:', err);
+    } finally {
+      fetchingReservesRef.current = false;
+    }
+  }, [clusterId, bpm]);
+
+  // Add exactly 1 track to the END of the queue
+  const extendQueue = useCallback(() => {
+    if (reserveRef.current.length === 0) {
+      fetchReserves();
+      return;
+    }
+    const next = reserveRef.current.shift()!;
+    setTracks(prev => [...prev, next]);
+    if (reserveRef.current.length < 5) {
+      fetchReserves();
+    }
+  }, [fetchReserves]);
 
   // Auto-advance handler
   const handleAutoAdvance = useCallback(() => {
@@ -32,32 +67,12 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     const currentTracks = tracksRef.current;
     const nextIdx = currentIdx + 1;
     if (nextIdx >= currentTracks.length) return;
-
-    const next = currentTracks[nextIdx];
     setNowPlayingIndex(nextIdx);
-
-    // Extend queue with more tracks from Deezer
-    const tid = next.track_id ?? next.id;
-    if (tid) {
-      const existingIds = currentTracks.map(t => t.track_id ?? t.id).filter(Boolean) as string[];
-      getTracksFromTrack(tid, clusterId, 10, existingIds).then(async (from) => {
-        if (!from?.tracks?.length) return;
-        const add = from.tracks.filter(m => (m.track_id ?? m.id) !== tid);
-        // Resolve Apple Music IDs for new tracks
-        const resolved = await resolveAppleMusicIds(add);
-        setTracks(prev => {
-          const rest = prev.slice(nextIdx + 1);
-          const seen = new Set(rest.map(t => t.track_id ?? t.id));
-          const extra = resolved.filter(m => !seen.has(m.track_id ?? m.id));
-          return [...prev.slice(0, nextIdx + 1), ...extra, ...rest];
-        });
-      });
-    }
-  }, [clusterId]);
+  }, []);
 
   // MusicKit player
   const player = useMusicKitPlayer({
-    crossfadeDuration: 5000,
+    crossfadeDuration: 6000,
     onTrackEnd: handleAutoAdvance,
   });
 
@@ -65,21 +80,24 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
   const isManualActionRef = useRef(false);
   const prevAutoIndexRef = useRef(-1);
 
-  // Crossfade to next track on auto-advance
+  // Crossfade to next track on auto-advance + extend queue
   useEffect(() => {
     const prev = prevAutoIndexRef.current;
     prevAutoIndexRef.current = nowPlayingIndex;
 
     if (isManualActionRef.current) {
       isManualActionRef.current = false;
-      return;
-    }
-
-    if (player.isReady && nowPlayingIndex >= 0 && prev >= 0 && nowPlayingIndex === prev + 1) {
+    } else if (player.isReady && nowPlayingIndex >= 0 && prev >= 0 && nowPlayingIndex === prev + 1) {
       const track = tracks[nowPlayingIndex];
       if (track?.apple_music_id) {
         player.crossfadeTo(track.apple_music_id);
       }
+    }
+
+    // Add exactly 1 track to the end when a new song starts
+    if (nowPlayingIndex >= 0 && nowPlayingIndex !== lastExtendedForRef.current) {
+      lastExtendedForRef.current = nowPlayingIndex;
+      extendQueue();
     }
   }, [nowPlayingIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -111,13 +129,20 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
         }
         if (cancelled) return;
 
+        // Shuffle playable tracks, pick a random one to lead
         const randomIdx = Math.floor(Math.random() * playable.length);
         const randomTrack = playable[randomIdx];
         const otherTracks = playable.filter((_, idx) => idx !== randomIdx);
         const ordered = [randomTrack, ...otherTracks];
 
-        setTracks(ordered);
-        tracksRef.current = ordered;
+        // Show first 20 in queue, stash the rest as reserves
+        const INITIAL_QUEUE_SIZE = 20;
+        const initialQueue = ordered.slice(0, INITIAL_QUEUE_SIZE);
+        const initialReserves = ordered.slice(INITIAL_QUEUE_SIZE);
+        reserveRef.current = initialReserves;
+
+        setTracks(initialQueue);
+        tracksRef.current = initialQueue;
         setNowPlayingIndex(0);
         nowPlayingIndexRef.current = 0;
 
@@ -164,21 +189,6 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     if (next.apple_music_id) {
       await player.crossfadeTo(next.apple_music_id);
     }
-
-    // Extend queue
-    const tid = next.track_id ?? next.id;
-    if (!tid) return;
-    const existingIds = tracks.map(t => t.track_id ?? t.id).filter(Boolean) as string[];
-    const from = await getTracksFromTrack(tid, clusterId, 10, existingIds);
-    if (!from?.tracks?.length) return;
-    const add = from.tracks.filter(m => (m.track_id ?? m.id) !== tid);
-    const resolved = await resolveAppleMusicIds(add);
-    setTracks(prev => {
-      const rest = prev.slice(nextIdx + 1);
-      const seen = new Set(rest.map(t => t.track_id ?? t.id));
-      const extra = resolved.filter(m => !seen.has(m.track_id ?? m.id) && m.apple_music_id);
-      return [...prev.slice(0, nextIdx + 1), ...extra, ...rest];
-    });
   };
 
   const handlePlayPause = async (track: Track, index: number) => {
@@ -415,13 +425,12 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
             </h2>
             <motion.button
               onClick={handleNext}
-              disabled={nowPlayingIndex >= tracks.length - 1}
               style={{
                 display: 'flex', alignItems: 'center', gap: 6,
                 padding: '8px 16px', borderRadius: '20px', minHeight: 44,
                 background: '#FF2D55', color: '#ffffff', border: 'none',
                 fontFamily: 'var(--font-body)', fontSize: '13px', fontWeight: 500,
-                cursor: 'pointer', opacity: nowPlayingIndex >= tracks.length - 1 ? 0.4 : 1,
+                cursor: 'pointer',
               }}
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.97 }}

@@ -1,7 +1,7 @@
-import React, { useCallback } from 'react';
+import { useCallback, useRef, useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Play, Pause, Music, SkipForward, ChevronLeft } from 'lucide-react';
-import { Track } from '../utils/api';
+import { Track, getClusterTracks, resolveAppleMusicIds } from '../utils/api';
 import { useMusicKitPlayer } from '../hooks/useMusicKitPlayer';
 
 interface SongQueueProps {
@@ -11,50 +11,102 @@ interface SongQueueProps {
   onBack: () => void;
 }
 
-export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
-  const [currentTrackIndex, setCurrentTrackIndex] = React.useState<number>(-1);
+export function SongQueue({ tracks: initialTracks, clusterId, bpm, onBack }: SongQueueProps) {
+  const [queue, setQueue] = useState<Track[]>(initialTracks);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(-1);
+  const queueRef = useRef<Track[]>(initialTracks);
+  const reserveRef = useRef<Track[]>([]);
+  const fetchingRef = useRef(false);
+  const lastExtendedForRef = useRef<number>(-1);
 
-  const currentTrack = currentTrackIndex >= 0 ? tracks[currentTrackIndex] : null;
+  useEffect(() => { queueRef.current = queue; }, [queue]);
+
+  const currentTrack = currentTrackIndex >= 0 ? queue[currentTrackIndex] : null;
   const playingTrackId = currentTrack?.track_id || null;
+
+  // Fetch a fresh pool of reserve tracks
+  const fetchReserves = useCallback(async () => {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
+    try {
+      const result = await getClusterTracks(clusterId, bpm, 50);
+      if (!result?.tracks?.length) return;
+
+      // Filter out tracks already in queue
+      const queueIds = new Set(queue.map(t => t.track_id ?? t.id));
+      const fresh = result.tracks.filter(t => !queueIds.has(t.track_id ?? t.id));
+
+      // Resolve Apple Music IDs
+      const resolved = await resolveAppleMusicIds(fresh);
+      reserveRef.current = resolved.filter(t => t.apple_music_id);
+    } catch (err) {
+      console.error('Error fetching reserves:', err);
+    } finally {
+      fetchingRef.current = false;
+    }
+  }, [clusterId, bpm, queue]);
+
+  // Load reserves on mount
+  useEffect(() => { fetchReserves(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Add 1 track from reserves when a new song plays
+  const extendQueue = useCallback(() => {
+    if (reserveRef.current.length === 0) {
+      // Reserves empty — fetch more in background
+      fetchReserves();
+      return;
+    }
+
+    const next = reserveRef.current.shift()!;
+    setQueue(prev => [...prev, next]);
+
+    // Refill reserves when running low
+    if (reserveRef.current.length < 5) {
+      fetchReserves();
+    }
+  }, [fetchReserves]);
 
   const handleTrackEnd = useCallback(() => {
     setCurrentTrackIndex((prevIndex) => {
       const nextIndex = prevIndex + 1;
-      if (nextIndex < tracks.length && tracks[nextIndex]?.apple_music_id) {
+      if (nextIndex < queueRef.current.length && queueRef.current[nextIndex]?.apple_music_id) {
         return nextIndex;
       }
       return -1;
     });
-  }, [tracks]);
+  }, []);
 
   const player = useMusicKitPlayer({
-    crossfadeDuration: 5000,
+    crossfadeDuration: 6000,
     onTrackEnd: handleTrackEnd,
   });
 
   // Cleanup on unmount
-  React.useEffect(() => {
+  useEffect(() => {
     return () => { player.cleanup(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isManualActionRef = React.useRef(false);
-  const prevIndexRef = React.useRef<number>(-1);
+  const isManualActionRef = useRef(false);
+  const prevIndexRef = useRef<number>(-1);
 
-  // Auto-advance crossfade
-  React.useEffect(() => {
+  // Auto-advance crossfade + extend queue
+  useEffect(() => {
     const prevIndex = prevIndexRef.current;
     prevIndexRef.current = currentTrackIndex;
 
     if (isManualActionRef.current) {
       isManualActionRef.current = false;
-      return;
-    }
-
-    if (currentTrackIndex >= 0 && prevIndex >= 0 && currentTrackIndex === prevIndex + 1) {
-      const track = tracks[currentTrackIndex];
+    } else if (currentTrackIndex >= 0 && prevIndex >= 0 && currentTrackIndex === prevIndex + 1) {
+      const track = queue[currentTrackIndex];
       if (track?.apple_music_id) {
         player.crossfadeTo(track.apple_music_id);
       }
+    }
+
+    // Add exactly 1 track to the end when a new song starts playing
+    if (currentTrackIndex >= 0 && currentTrackIndex !== lastExtendedForRef.current) {
+      lastExtendedForRef.current = currentTrackIndex;
+      extendQueue();
     }
   }, [currentTrackIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -78,8 +130,8 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
 
   const handleSkipNext = () => {
     const nextIndex = currentTrackIndex + 1;
-    if (nextIndex < tracks.length) {
-      const track = tracks[nextIndex];
+    if (nextIndex < queue.length) {
+      const track = queue[nextIndex];
       if (track?.apple_music_id) {
         isManualActionRef.current = true;
         setCurrentTrackIndex(nextIndex);
@@ -124,7 +176,13 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
           fontFamily: 'var(--font-body)', fontSize: '13px', fontWeight: 300,
           color: 'rgba(255, 255, 255, 0.35)',
         }}>
-          cluster {clusterId} · {bpm} BPM · {tracks.length} songs
+          cluster {clusterId} · {bpm} BPM · {queue.length} songs
+        </p>
+        <p style={{
+          fontFamily: 'var(--font-body)', fontSize: '11px', fontWeight: 300,
+          color: 'rgba(255, 255, 255, 0.25)', marginTop: 4,
+        }}>
+          BPM detected via audio waveform analysis
         </p>
 
         {/* Now Playing & Skip Controls */}
@@ -163,12 +221,10 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
 
             <motion.button
               onClick={handleSkipNext}
-              disabled={currentTrackIndex >= tracks.length - 1}
               style={{
                 marginLeft: 12, padding: 10, borderRadius: '50%', border: 'none', minWidth: 44, minHeight: 44,
                 background: 'rgba(255, 45, 85, 0.15)', color: '#FF2D55',
                 cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                opacity: currentTrackIndex >= tracks.length - 1 ? 0.4 : 1,
               }}
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
@@ -181,7 +237,7 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
 
       {/* Song List */}
       <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', padding: '20px 24px calc(24px + var(--safe-area-bottom))', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {tracks.length === 0 ? (
+        {queue.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px 0' }}>
             <Music style={{ width: 48, height: 48, color: 'rgba(255, 45, 85, 0.2)', margin: '0 auto 16px' }} />
             <p style={{ fontFamily: 'var(--font-body)', fontSize: '14px', color: 'rgba(255,255,255,0.35)', fontWeight: 300 }}>
@@ -189,14 +245,14 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
             </p>
           </div>
         ) : (
-          tracks.map((track, index) => {
+          queue.map((track, index) => {
             const isNowPlaying = index === currentTrackIndex;
             return (
               <motion.div
                 key={track.track_id}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.04 }}
+                transition={{ delay: Math.min(index * 0.04, 1) }}
                 style={{
                   borderRadius: '14px', padding: '14px 16px',
                   display: 'flex', alignItems: 'center', gap: 14,
@@ -245,14 +301,6 @@ export function SongQueue({ tracks, clusterId, bpm, onBack }: SongQueueProps) {
                     <span style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontWeight: 300 }}>
                       {formatDuration(track.duration_ms)}
                     </span>
-                    {track.rank && (
-                      <>
-                        <span style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: 'rgba(255,255,255,0.2)' }}>·</span>
-                        <span style={{ fontFamily: 'var(--font-body)', fontSize: '11px', color: '#FF2D55', opacity: 0.5, fontWeight: 400 }}>
-                          #{track.rank}
-                        </span>
-                      </>
-                    )}
                   </div>
                 </div>
 
