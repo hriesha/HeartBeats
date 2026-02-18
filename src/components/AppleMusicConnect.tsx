@@ -5,12 +5,20 @@ import { useState, useRef, useEffect } from 'react';
 interface AppleMusicConnectProps {
   onConnected?: () => void;
   onSkip?: () => void;
+  onDisconnect?: () => void;
 }
 
-export function AppleMusicConnect({ onConnected, onSkip }: AppleMusicConnectProps) {
+export function AppleMusicConnect({ onConnected, onSkip, onDisconnect }: AppleMusicConnectProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [showRetry, setShowRetry] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isAlreadyConnected, setIsAlreadyConnected] = useState(false);
+
+  // Check if already authorized on mount
+  useEffect(() => {
+    const music = window.MusicKit?.getInstance?.();
+    setIsAlreadyConnected(!!music?.isAuthorized);
+  }, []);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -225,6 +233,28 @@ export function AppleMusicConnect({ onConnected, onSkip }: AppleMusicConnectProp
           </>
         )}
       </motion.button>
+
+      {/* Disconnect Button — shown when already connected */}
+      {isAlreadyConnected && onDisconnect && !isConnecting && (
+        <button
+          onClick={onDisconnect}
+          style={{
+            marginTop: 12,
+            fontFamily: 'var(--font-body)',
+            fontSize: '13px',
+            color: 'rgba(255,255,255,0.35)',
+            fontWeight: 300,
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            textDecoration: 'underline',
+            textUnderlineOffset: '3px',
+            minHeight: 44,
+          }}
+        >
+          disconnect apple music
+        </button>
+      )}
 
       {/* "I've authorized" fallback — appears after 5s if connecting hangs */}
       {isConnecting && showRetry && (

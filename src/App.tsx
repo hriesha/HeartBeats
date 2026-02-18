@@ -89,6 +89,18 @@ export default function App() {
     setCurrentScreen('controlOptions');
   };
 
+  const handleDisconnect = async () => {
+    try {
+      const music = window.MusicKit?.getInstance?.();
+      if (music) {
+        await music.unauthorize();
+      }
+    } catch (err) {
+      console.warn('Disconnect error:', err);
+    }
+    setCurrentScreen('connect');
+  };
+
   const handleSelectCustomControls = () => {
     setCurrentScreen('bpm');
   };
@@ -157,7 +169,7 @@ export default function App() {
             </div>
           </div>
         )}
-        {currentScreen === 'connect' && <AppleMusicConnect onConnected={handleConnected} onSkip={handleSkip} />}
+        {currentScreen === 'connect' && <AppleMusicConnect onConnected={handleConnected} onSkip={handleSkip} onDisconnect={handleDisconnect} />}
         {currentScreen === 'controlOptions' && <ControlOptions onSelectCustom={handleSelectCustomControls} onSelectWatch={handleSelectWatch} onBack={handleBack} />}
         {currentScreen === 'bpm' && <PaceSelection onSubmit={handlePaceSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}

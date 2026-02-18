@@ -62,6 +62,14 @@ _VIBE_CACHE_TTL = 300  # 5 min — keeps BPM analysis cached but rotates songs
 KM_PER_MILE = 1.609344
 
 
+def _is_likely_english(text: str) -> bool:
+    """Check if text is likely English (mostly ASCII/Latin characters)."""
+    if not text:
+        return True
+    ascii_count = sum(1 for c in text if ord(c) < 128)
+    return ascii_count / len(text) >= 0.7
+
+
 def _resolve_target_bpm(data: dict) -> Optional[float]:
     """Resolve target BPM from body: bpm directly, or pace_value + pace_unit."""
     bpm = data.get("bpm")
@@ -177,7 +185,13 @@ def _fetch_vibe_tracks(
     MAX_PER_ARTIST = 2
 
     for tid, dt in candidates:
-        artist_name = dt.get("artist", {}).get("name", "").lower()
+        # Skip non-English tracks (French, Korean, etc.)
+        title = dt.get("title", dt.get("title_short", ""))
+        artist = dt.get("artist", {}).get("name", "")
+        if not _is_likely_english(title) or not _is_likely_english(artist):
+            continue
+
+        artist_name = artist.lower()
         if artist_count.get(artist_name, 0) >= MAX_PER_ARTIST:
             continue
         artist_count[artist_name] = artist_count.get(artist_name, 0) + 1
