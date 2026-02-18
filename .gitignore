@@ -57,3 +57,4 @@ recs/model/
 *.db
 *.npy
 
+.vercel
