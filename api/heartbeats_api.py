@@ -136,6 +136,7 @@ def _fetch_vibe_tracks(
     bpm_max = int(target_bpm + BPM_TOLERANCE)
 
     all_tracks: Dict[int, Dict] = {}  # dedup by Deezer track ID
+    bpm_search_ids: set = set()  # tracks from BPM-filtered search (already in range)
 
     # Source 1: Chart tracks — use random offset for variety
     chart_offset = random.choice([0, 0, 25, 50])
@@ -146,6 +147,7 @@ def _fetch_vibe_tracks(
             all_tracks[tid] = dt
 
     # Source 2: BPM-filtered search — pick 3 random keywords, random offsets
+    # These tracks are already filtered by Deezer to be within BPM range
     all_keywords = vibe.get("search_keywords", [])
     picked_keywords = random.sample(all_keywords, min(3, len(all_keywords)))
     for keyword in picked_keywords:
@@ -155,8 +157,10 @@ def _fetch_vibe_tracks(
         )
         for dt in results:
             tid = dt.get("id")
-            if tid and tid not in all_tracks:
-                all_tracks[tid] = dt
+            if tid:
+                bpm_search_ids.add(tid)
+                if tid not in all_tracks:
+                    all_tracks[tid] = dt
 
     # Source 3: Top artist tracks — pick random artists
     genre_artists = _deezer.get_genre_artists(genre_id)
@@ -169,22 +173,28 @@ def _fetch_vibe_tracks(
                 if tid and tid not in all_tracks:
                     all_tracks[tid] = dt
 
-    # Sort candidates by Deezer rank (popularity), take top pool
+    # Sort candidates by popularity
     candidates = list(all_tracks.items())
     candidates.sort(key=lambda x: -(x[1].get("rank", 0) or 0))
-    # Fetch BPM for top 20 candidates (librosa analysis is slow on small servers)
-    pool_ids = [tid for tid, _ in candidates[:20]]
-    bpm_map = _deezer.batch_get_track_bpms(pool_ids)
 
-    # Build result — BPM within ±tolerance, max 2 songs per artist
+    # Only run slow librosa BPM analysis on chart/artist tracks (not BPM-searched)
+    # BPM-searched tracks are already in range from Deezer's filter
+    needs_bpm = [tid for tid, _ in candidates if tid not in bpm_search_ids][:10]
+    bpm_map = _deezer.batch_get_track_bpms(needs_bpm) if needs_bpm else {}
+
+    # Build result — max 2 songs per artist
     result = []
     artist_count: Dict[str, int] = {}
     MAX_PER_ARTIST = 2
 
     for tid, dt in candidates:
-        actual_bpm = bpm_map.get(tid)
-        if not actual_bpm or abs(actual_bpm - target_bpm) > BPM_TOLERANCE:
-            continue
+        if tid in bpm_search_ids:
+            # Trust Deezer's BPM search filter — use target BPM
+            actual_bpm = target_bpm
+        else:
+            actual_bpm = bpm_map.get(tid)
+            if not actual_bpm or abs(actual_bpm - target_bpm) > BPM_TOLERANCE:
+                continue
 
         artist_name = dt.get("artist", {}).get("name", "").lower()
         if artist_count.get(artist_name, 0) >= MAX_PER_ARTIST:
