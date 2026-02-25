@@ -2,8 +2,10 @@
  * API utility functions for HeartBeats backend
  */
 
-const API_ROOT = import.meta.env.VITE_API_URL || "http://localhost:8888";
-const API_BASE_URL = API_ROOT.endsWith("/api") ? API_ROOT : `${API_ROOT}/api`;
+const _apiRoot = import.meta.env.VITE_API_URL ?? "";
+const API_BASE_URL = _apiRoot
+  ? (_apiRoot.endsWith("/api") ? _apiRoot : `${_apiRoot}/api`)
+  : "/api";
 
 export interface Cluster {
   id: number;
