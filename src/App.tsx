@@ -8,6 +8,7 @@ import { ControlOptions } from './components/ControlOptions';
 import { PaceSelection } from './components/PaceSelection';
 import { WorkoutSelection } from './components/WorkoutSelection';
 import { VibeSelection } from './components/VibeSelection';
+import { ArtistSelection } from './components/ArtistSelection';
 import { VibeDetail } from './components/VibeDetail';
 import { TrackerConnected } from './components/TrackerConnected';
 
@@ -21,11 +22,12 @@ export type VibeType = {
 };
 
 export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<'loading' | 'connect' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'detail' | 'trackerConnected'>('loading');
+  const [currentScreen, setCurrentScreen] = useState<'loading' | 'connect' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'artist' | 'detail' | 'trackerConnected'>('loading');
   const [selectedBPM, setSelectedBPM] = useState(120);
   const [paceValue, setPaceValue] = useState(10.0);
   const [paceUnit, setPaceUnit] = useState<'min/mile' | 'min/km'>('min/mile');
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
+  const [selectedArtists, setSelectedArtists] = useState<string[]>([]);
 
   // Configure native status bar
   useEffect(() => {
@@ -117,6 +119,11 @@ export default function App() {
   const handlePaceSubmit = (value: number, unit: 'min/mile' | 'min/km') => {
     setPaceValue(value);
     setPaceUnit(unit);
+    // Mirror the backend cadence formula so selectedBPM is always accurate
+    const speedMph = 60.0 / value;
+    const speedMphNorm = unit === 'min/km' ? speedMph / 1.609344 : speedMph;
+    const calculatedBpm = Math.max(140, Math.min(200, Math.round(125.0 + 5.5 * speedMphNorm)));
+    setSelectedBPM(calculatedBpm);
     setCurrentScreen('vibe');
   };
 
@@ -139,11 +146,19 @@ export default function App() {
 
   const handleVibeSelect = (vibe: VibeType) => {
     setSelectedVibe(vibe);
+    setSelectedArtists([]);
+    setCurrentScreen('artist');
+  };
+
+  const handleArtistSelect = (artists: string[]) => {
+    setSelectedArtists(artists);
     setCurrentScreen('detail');
   };
 
   const handleBack = () => {
     if (currentScreen === 'detail') {
+      setCurrentScreen('artist');
+    } else if (currentScreen === 'artist') {
       setCurrentScreen('vibe');
     } else if (currentScreen === 'vibe') {
       setCurrentScreen('bpm');
@@ -174,7 +189,8 @@ export default function App() {
         {currentScreen === 'bpm' && <PaceSelection onSubmit={handlePaceSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}
         {currentScreen === 'vibe' && <VibeSelection paceValue={paceValue} paceUnit={paceUnit} bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
-        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} />}
+        {currentScreen === 'artist' && selectedVibe && <ArtistSelection vibe={selectedVibe} onArtistSelect={handleArtistSelect} onBack={handleBack} />}
+        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} artistNames={selectedArtists.length ? selectedArtists : undefined} onBack={handleBack} />}
         {currentScreen === 'trackerConnected' && <TrackerConnected onComplete={handleTrackerConnected} />}
       </div>
     </div>

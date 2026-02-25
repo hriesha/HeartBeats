@@ -13,6 +13,7 @@ import logging
 import math
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional
 
 from flask import Flask, request, jsonify
@@ -134,25 +135,21 @@ def _fetch_vibe_tracks(
     Fetch tracks for a vibe (genre) at the given BPM.
 
     Sources:
-    1. Chart tracks for the genre (popular, recent) — random offset
-    2. BPM-filtered search using randomly picked keywords + random offsets
-    3. Top tracks from genre's top artists (randomized selection)
+    1. BPM-filtered search (Deezer pre-filters — BPM is already confirmed)
+    2. Chart tracks for the genre (popular but unverified — batch BPM check)
+    3. Top artist tracks (fallback if pool is still thin)
     """
     vibe_id = vibe["vibe_id"]
     genre_id = vibe["genre_id"]
     bpm_min = int(target_bpm - BPM_TOLERANCE)
     bpm_max = int(target_bpm + BPM_TOLERANCE)
 
-    all_tracks: Dict[int, Dict] = {}  # dedup by Deezer track ID
+    # confirmed_bpm: track ID -> known BPM (from search, already Deezer-filtered)
+    confirmed_bpm: Dict[int, float] = {}
+    # unverified: track ID -> track dict (chart/artist tracks, BPM unknown)
+    unverified: Dict[int, Dict] = {}
 
-    # Source 1: Chart tracks (most popular first)
-    chart_tracks = _deezer.get_chart_tracks(genre_id, limit=50)
-    for dt in chart_tracks:
-        tid = dt.get("id")
-        if tid and tid not in all_tracks:
-            all_tracks[tid] = dt
-
-    # Source 2: BPM-filtered search — use top 2 keywords (most popular results)
+    # Source 1: BPM-filtered search — Deezer already filters by BPM range
     picked_keywords = vibe.get("search_keywords", [])[:2]
     for keyword in picked_keywords:
         results, _ = _deezer.search_tracks_by_bpm(
@@ -160,11 +157,20 @@ def _fetch_vibe_tracks(
         )
         for dt in results:
             tid = dt.get("id")
-            if tid and tid not in all_tracks:
-                all_tracks[tid] = dt
+            if tid and tid not in confirmed_bpm:
+                # Trust Deezer's search BPM field; fallback to target if absent
+                track_bpm = dt.get("bpm") or target_bpm
+                confirmed_bpm[tid] = float(track_bpm)
 
-    # Source 3: Top artist tracks — only when pool is thin
-    if len(all_tracks) < limit:
+    # Source 2: Chart tracks (popular, unverified BPM)
+    chart_tracks = _deezer.get_chart_tracks(genre_id, limit=50)
+    for dt in chart_tracks:
+        tid = dt.get("id")
+        if tid and tid not in confirmed_bpm and tid not in unverified:
+            unverified[tid] = dt
+
+    # Source 3: Top artist tracks — only when combined pool is thin
+    if len(confirmed_bpm) + len(unverified) < limit + 10:
         genre_artists = _deezer.get_genre_artists(genre_id)
         if genre_artists:
             picked_artists = random.sample(genre_artists, min(2, len(genre_artists)))
@@ -172,55 +178,186 @@ def _fetch_vibe_tracks(
                 artist_tracks = _deezer.get_artist_top_tracks(artist["id"], limit=10)
                 for dt in artist_tracks:
                     tid = dt.get("id")
-                    if tid and tid not in all_tracks:
-                        all_tracks[tid] = dt
+                    if tid and tid not in confirmed_bpm and tid not in unverified:
+                        unverified[tid] = dt
 
-    # Sort candidates by popularity — chart hits first
-    candidates = list(all_tracks.items())
-    candidates.sort(key=lambda x: -(x[1].get("rank", 0) or 0))
+    # --- Re-collect confirmed track dicts (cached, no extra API calls) ---
+    confirmed_dicts: Dict[int, Dict] = {}
+    for keyword in picked_keywords:
+        results, _ = _deezer.search_tracks_by_bpm(
+            keyword, bpm_min, bpm_max, limit=40
+        )
+        for dt in results:
+            tid = dt.get("id")
+            if tid and tid in confirmed_bpm and tid not in confirmed_dicts:
+                confirmed_dicts[tid] = dt
 
-    # Step 1: Pick top tracks by popularity + artist diversity (no BPM check yet)
-    shortlist = []
+    # --- Build a single candidate pool: confirmed first, then unverified ---
+    # Sort each by popularity desc
+    confirmed_sorted = sorted(
+        confirmed_dicts.items(),
+        key=lambda x: -(x[1].get("rank", 0) or 0),
+    )
+    unverified_sorted = sorted(
+        unverified.items(),
+        key=lambda x: -(x[1].get("rank", 0) or 0),
+    )
+
+    # Apply English + artist diversity filter to pick the shortlist
     artist_count: Dict[str, int] = {}
     MAX_PER_ARTIST = 2
+    seen_ids: set = set()
 
-    for tid, dt in candidates:
-        # Skip non-English tracks (French, Korean, etc.)
+    def _accept(tid: int, dt: Dict) -> bool:
         title = dt.get("title", dt.get("title_short", ""))
         artist = dt.get("artist", {}).get("name", "")
         if not _is_likely_english(title) or not _is_likely_english(artist):
-            continue
+            return False
+        akey = artist.lower()
+        if artist_count.get(akey, 0) >= MAX_PER_ARTIST:
+            return False
+        artist_count[akey] = artist_count.get(akey, 0) + 1
+        seen_ids.add(tid)
+        return True
 
-        artist_name = artist.lower()
-        if artist_count.get(artist_name, 0) >= MAX_PER_ARTIST:
-            continue
-        artist_count[artist_name] = artist_count.get(artist_name, 0) + 1
-        shortlist.append((tid, dt))
-        if len(shortlist) >= limit + 10:  # grab extras in case some fail BPM
+    shortlist: List[tuple] = []   # (tid, dt, is_confirmed)
+    for tid, dt in confirmed_sorted:
+        if _accept(tid, dt):
+            shortlist.append((tid, dt, True))
+        if len(shortlist) >= limit + 10:
             break
 
-    # Step 2: Batch-fetch real BPMs for shortlisted tracks only
-    shortlist_ids = [tid for tid, _ in shortlist]
+    for tid, dt in unverified_sorted:
+        if tid in seen_ids:
+            continue
+        if _accept(tid, dt):
+            shortlist.append((tid, dt, False))
+        if len(shortlist) >= limit + 10:
+            break
+
+    # --- Batch-fetch real BPMs for the entire shortlist in one parallel call ---
+    shortlist_ids = [tid for tid, _, _ in shortlist]
     bpm_map = _deezer.batch_get_track_bpms(shortlist_ids)
 
-    # Step 3: Build final result with real BPMs
-    result = []
-    for tid, dt in shortlist:
+    result: List[Dict] = []
+    for tid, dt, is_confirmed in shortlist:
         actual_bpm = bpm_map.get(tid)
-        if actual_bpm and abs(actual_bpm - target_bpm) > BPM_TOLERANCE:
-            continue  # real BPM out of range
-        if not actual_bpm:
-            actual_bpm = target_bpm  # fallback for tracks where detection failed
 
-        result.append(_deezer_track_to_heartbeats(
-            dt, vibe_id, bpm=actual_bpm
-        ))
+        if is_confirmed:
+            # Already in-range via search filter; use real BPM if available,
+            # otherwise use target so the track isn't dropped
+            display_bpm = actual_bpm if actual_bpm else target_bpm
+        else:
+            # Must have a verified BPM and be in range
+            if actual_bpm is None:
+                continue
+            if abs(actual_bpm - target_bpm) > BPM_TOLERANCE:
+                continue
+            display_bpm = actual_bpm
+
+        result.append(_deezer_track_to_heartbeats(dt, vibe_id, bpm=display_bpm))
         if len(result) >= limit:
             break
 
     # Shuffle to avoid same order every time
     random.shuffle(result)
+    for i, track in enumerate(result, start=1):
+        track["rank"] = i
 
+    return result
+
+
+def _fetch_artists_tracks(
+    artist_names: List[str],
+    vibe: Dict[str, Any],
+    target_bpm: float,
+    limit: int = 30,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch tracks for one or more artists that match the target BPM.
+    Results are interleaved so the playlist mixes all selected artists evenly.
+    """
+    vibe_id = vibe["vibe_id"]
+    bpm_min = int(target_bpm - BPM_TOLERANCE)
+    bpm_max = int(target_bpm + BPM_TOLERANCE)
+
+    # Fetch each artist in parallel
+    per_artist: Dict[str, List[Dict]] = {}
+
+    def _artist_matches(dt: Dict, name: str) -> bool:
+        """Check the track's artist field loosely matches the requested name."""
+        track_artist = dt.get("artist", {}).get("name", "").lower().strip()
+        requested = name.lower().strip()
+        # Accept if either contains the other (handles "Drake" vs "Drake feat. X")
+        return requested in track_artist or track_artist in requested
+
+    def _fetch_one(name: str) -> tuple:
+        raw = _deezer.search_tracks_by_artist_bpm(name, bpm_min, bpm_max, limit=40)
+        seen: set = set()
+        tracks: List[Dict] = []
+        for dt in raw:
+            tid = dt.get("id")
+            if not tid or tid in seen:
+                continue
+            # Enforce artist match — reject tracks where the artist doesn't match
+            if not _artist_matches(dt, name):
+                continue
+            title = dt.get("title", dt.get("title_short", ""))
+            if not _is_likely_english(title):
+                continue
+            seen.add(tid)
+            tracks.append((tid, dt))  # store raw dict for BPM fetch later
+        return name, tracks
+
+    with ThreadPoolExecutor(max_workers=len(artist_names)) as executor:
+        for name, raw_pairs in executor.map(_fetch_one, artist_names):
+            per_artist[name] = raw_pairs
+
+    # Batch-fetch real BPMs for all artist tracks in one parallel call
+    all_pairs: List[tuple] = []
+    for name in artist_names:
+        all_pairs.extend(per_artist.get(name, []))
+
+    all_ids = [tid for tid, _ in all_pairs]
+    bpm_map = _deezer.batch_get_track_bpms(all_ids)
+
+    # Convert raw dicts to heartbeats format using real BPMs
+    per_artist_converted: Dict[str, List[Dict]] = {n: [] for n in artist_names}
+    for name in artist_names:
+        for tid, dt in per_artist.get(name, []):
+            actual_bpm = bpm_map.get(tid, target_bpm)
+            per_artist_converted[name].append(
+                _deezer_track_to_heartbeats(dt, vibe_id, bpm=actual_bpm)
+            )
+
+    # Interleave: round-robin across artists so the mix is even
+    seen_ids: set = set()
+    result: List[Dict] = []
+    queues = [per_artist_converted[n] for n in artist_names if per_artist_converted.get(n)]
+    idx = 0
+    while len(result) < limit and any(queues):
+        q = queues[idx % len(queues)]
+        while q:
+            t = q.pop(0)
+            if t["track_id"] not in seen_ids:
+                seen_ids.add(t["track_id"])
+                result.append(t)
+                break
+        idx += 1
+        # Remove exhausted queues
+        queues = [q for q in queues if q]
+
+    # Top up from general vibe pool if still short
+    if len(result) < max(limit // 2, 10):
+        filler = _fetch_vibe_tracks(vibe, target_bpm, limit=limit)
+        for t in filler:
+            if t["track_id"] not in seen_ids:
+                result.append(t)
+                seen_ids.add(t["track_id"])
+            if len(result) >= limit:
+                break
+
+    random.shuffle(result)
     for i, track in enumerate(result, start=1):
         track["rank"] = i
 
@@ -248,6 +385,20 @@ def apple_music_developer_token():
     return jsonify({"success": True, "developer_token": token})
 
 
+@app.route('/api/vibes/<int:vibe_id>/artists', methods=['GET'])
+def get_vibe_artists(vibe_id: int):
+    """Return the curated artist list for a given vibe."""
+    vibe = next((v for v in VIBE_DEFINITIONS if v["vibe_id"] == vibe_id), None)
+    if vibe is None:
+        return jsonify({"success": False, "error": f"Vibe {vibe_id} not found"}), 404
+    return jsonify({
+        "success": True,
+        "vibe_id": vibe_id,
+        "vibe_name": vibe["name"],
+        "artists": vibe["curated_artists"],
+    })
+
+
 @app.route('/api/clusters', methods=['POST'])
 def get_clusters():
     """Return genre-based vibes for the given BPM."""
@@ -265,9 +416,7 @@ def get_clusters():
         bpm_min = int(target_bpm - BPM_TOLERANCE)
         bpm_max = int(target_bpm + BPM_TOLERANCE)
 
-        cluster_stats = []
-        for vibe in vibes:
-            # Quick chart fetch (cached) for track count + top artists
+        def _fetch_vibe_stat(vibe: Dict[str, Any]) -> Dict[str, Any]:
             chart_tracks = _deezer.get_chart_tracks(vibe["genre_id"], limit=50)
             _, search_total = _deezer.search_tracks_by_bpm(
                 vibe["search_keywords"][0], bpm_min, bpm_max, limit=1,
@@ -275,7 +424,7 @@ def get_clusters():
             track_count = max(len(chart_tracks), search_total, 30)
 
             top_artist_names = []
-            seen = set()
+            seen: set = set()
             for ct in chart_tracks[:20]:
                 aname = ct.get("artist", {}).get("name", "")
                 if aname and aname not in seen:
@@ -284,7 +433,7 @@ def get_clusters():
                 if len(top_artist_names) >= 3:
                     break
 
-            cluster_stats.append({
+            return {
                 "cluster_id": vibe["vibe_id"],
                 "count": track_count,
                 "mean_tempo": target_bpm,
@@ -294,7 +443,24 @@ def get_clusters():
                 "top_artists": top_artist_names,
                 "tags": vibe["tags"],
                 "color": vibe["color"],
-            })
+            }
+
+        # Fetch all vibe stats in parallel
+        vibe_order = {v["vibe_id"]: i for i, v in enumerate(vibes)}
+        cluster_stats_raw: Dict[int, Dict] = {}
+        with ThreadPoolExecutor(max_workers=len(vibes)) as executor:
+            future_to_vibe = {
+                executor.submit(_fetch_vibe_stat, v): v for v in vibes
+            }
+            for future in as_completed(future_to_vibe):
+                stat = future.result()
+                cluster_stats_raw[stat["cluster_id"]] = stat
+
+        # Restore original vibe order
+        cluster_stats = sorted(
+            cluster_stats_raw.values(),
+            key=lambda s: vibe_order.get(s["cluster_id"], 99),
+        )
 
         return jsonify({
             "success": True,
@@ -311,7 +477,7 @@ def get_clusters():
 
 @app.route('/api/tracks', methods=['POST'])
 def get_tracks():
-    """Get tracks for a given BPM and vibe (cluster_id)."""
+    """Get tracks for a given BPM, vibe (cluster_id), and optional artist filter."""
     try:
         data = request.get_json() or {}
         target_bpm = data.get("bpm")
@@ -319,6 +485,11 @@ def get_tracks():
             target_bpm = _resolve_target_bpm(data)
         cluster_id = data.get("cluster_id")
         topk = min(data.get("topk", 20), 50)
+        # Accept artist_names (array) or legacy artist_name (string)
+        raw_names = data.get("artist_names") or []
+        if not raw_names and data.get("artist_name"):
+            raw_names = [data["artist_name"]]
+        artist_names = [n.strip() for n in raw_names if n and n.strip()]
 
         if target_bpm is None:
             return jsonify({"success": False, "error": "BPM or pace is required"}), 400
@@ -336,7 +507,19 @@ def get_tracks():
             vibes = get_vibes_for_bpm(target_bpm)
             vibe = vibes[0] if vibes else VIBE_DEFINITIONS[0]
 
-        # Check cache (with TTL)
+        # Artist filter — skip the general cache, always fetch fresh
+        if artist_names:
+            tracks = _fetch_artists_tracks(artist_names, vibe, target_bpm, limit=max(topk, 30))
+            tracks = tracks[:topk]
+            return jsonify({
+                "success": True,
+                "cluster_id": vibe["vibe_id"],
+                "tracks": tracks,
+                "count": len(tracks),
+                "artist_filter": artist_names,
+            })
+
+        # No artist filter — use the shared vibe cache
         cache_key = f"{vibe['vibe_id']}:{int(target_bpm)}"
         cached = _vibe_tracks_cache.get(cache_key)
         now = time.time()
@@ -508,6 +691,7 @@ def not_found(error):
             "/api/health",
             "/api/apple-music/developer-token",
             "/api/clusters",
+            "/api/vibes/<id>/artists",
             "/api/tracks",
             "/api/tracks/from-track",
             "/api/tracks/details",

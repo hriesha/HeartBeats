@@ -9,10 +9,11 @@ import { useMusicKitPlayer } from '../hooks/useMusicKitPlayer';
 interface VibeDetailProps {
   vibe: VibeType;
   bpm?: number;
+  artistNames?: string[];
   onBack: () => void;
 }
 
-export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
+export function VibeDetail({ vibe, bpm = 120, artistNames, onBack }: VibeDetailProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [nowPlayingIndex, setNowPlayingIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -34,7 +35,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     if (fetchingReservesRef.current) return;
     fetchingReservesRef.current = true;
     try {
-      const result = await getClusterTracks(clusterId, bpm, 50);
+      const result = await getClusterTracks(clusterId, bpm, 50, artistNames);
       if (!result?.tracks?.length) return;
       // Filter out tracks already in queue
       const queueIds = new Set(tracksRef.current.map(t => t.track_id ?? t.id));
@@ -111,7 +112,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
       setIsLoading(true);
       setError(null);
       try {
-        const clusterData = await getClusterTracks(clusterId, bpm, 50);
+        const clusterData = await getClusterTracks(clusterId, bpm, 50, artistNames);
         if (!clusterData?.tracks?.length) {
           setError('No tracks found for this cluster. Try another vibe.');
           return;

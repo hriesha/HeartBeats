@@ -8,6 +8,7 @@ No authentication required. Rate limit: ~45 req/5s (conservative).
 import time
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 
@@ -193,8 +194,7 @@ class DeezerClient:
         return tracks
 
     def get_track_bpm(self, track_id: int) -> Optional[float]:
-        """Get BPM for a track. Tries Deezer metadata first, falls back to audio analysis."""
-        # Check BPM cache first
+        """Get BPM for a track from Deezer metadata."""
         cache_key = f"bpm:{track_id}"
         cached = self._cache_get(cache_key)
         if cached is not None:
@@ -204,55 +204,69 @@ class DeezerClient:
         if not detail:
             return None
 
-        # Try Deezer's metadata BPM
         bpm = detail.get("bpm", 0)
         if bpm and bpm > 0:
             self._cache_set(cache_key, float(bpm), CACHE_TTL_TRACK_DETAIL)
             return float(bpm)
 
-        # Fallback: detect BPM from 30s audio preview
-        preview_url = detail.get("preview")
-        if preview_url:
-            detected = self._detect_bpm_from_preview(preview_url)
-            if detected:
-                self._cache_set(cache_key, detected, CACHE_TTL_TRACK_DETAIL)
-                return detected
-
         return None
 
-    def _detect_bpm_from_preview(self, preview_url: str) -> Optional[float]:
-        """Download Deezer 30s preview and detect BPM via audio analysis."""
-        try:
-            import tempfile
-            import os
-            import signal
+    def search_tracks_by_artist_bpm(self, artist_name: str, bpm_min: int,
+                                     bpm_max: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """Search for tracks by a specific artist within a BPM range."""
+        cache_key = f"artist_bpm:{artist_name.lower()}:{bpm_min}:{bpm_max}:{limit}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
 
-            resp = self._session.get(preview_url, timeout=8)
-            if resp.status_code != 200:
-                return None
+        # Deezer supports artist:"name" syntax in the q parameter
+        query = f'artist:"{artist_name}"'
+        data = self._get("/search/track", params={
+            "q": query,
+            "bpm_min": bpm_min,
+            "bpm_max": bpm_max,
+            "limit": limit,
+            "order": "RANKING",
+        })
+        tracks = data["data"] if data and "data" in data else []
 
-            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
-                f.write(resp.content)
-                tmp_path = f.name
+        # If strict artist search returns few results, try a broader query
+        if len(tracks) < 5:
+            data2 = self._get("/search/track", params={
+                "q": artist_name,
+                "bpm_min": bpm_min,
+                "bpm_max": bpm_max,
+                "limit": limit,
+                "order": "RANKING",
+            })
+            if data2 and "data" in data2:
+                seen = {t.get("id") for t in tracks}
+                for t in data2["data"]:
+                    if t.get("id") not in seen:
+                        tracks.append(t)
 
-            try:
-                import librosa
-                import numpy as np
-                # Use mono, lower sample rate for speed
-                audio, sr = librosa.load(tmp_path, sr=11025, mono=True)
-                tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
-                bpm = float(tempo) if not hasattr(tempo, '__len__') else float(tempo[0])
-                return round(bpm, 1) if bpm > 0 else None
-            finally:
-                os.unlink(tmp_path)
-        except Exception as e:
-            log.warning("BPM detection failed for preview: %s", e)
-            return None
+        self._cache_set(cache_key, tracks, CACHE_TTL_SEARCH)
+        return tracks
 
-    def batch_get_track_bpms(self, track_ids: List[int]) -> Dict[int, float]:
+    def batch_get_track_bpms(self, track_ids: List[int],
+                             max_workers: int = 10) -> Dict[int, float]:
+        """Fetch BPMs for multiple tracks in parallel."""
         result: Dict[int, float] = {}
-        for tid in track_ids:
-            bpm = self.get_track_bpm(tid)
-            if bpm is not None:
-                result[tid] = bpm
+        if not track_ids:
+            return result
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_id = {
+                executor.submit(self.get_track_bpm, tid): tid
+                for tid in track_ids
+            }
+            for future in as_completed(future_to_id):
+                tid = future_to_id[future]
+                try:
+                    bpm = future.result()
+                    if bpm is not None:
+                        result[tid] = bpm
+                except Exception as e:
+                    log.warning("BPM fetch failed for track %s: %s", tid, e)
+
         return result

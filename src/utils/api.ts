@@ -168,18 +168,35 @@ export async function runClustering(
 }
 
 /**
- * Get KNN-matched tracks for a cluster
+ * Get curated artist suggestions for a vibe.
+ */
+export async function getVibeArtists(vibeId: number): Promise<string[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/vibes/${vibeId}/artists`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data.artists) ? data.artists : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get KNN-matched tracks for a cluster, optionally filtered by one or more artists.
  */
 export async function getClusterTracks(
   clusterId: number,
   bpm: number,
-  topk: number = 10
+  topk: number = 10,
+  artistNames?: string[],
 ): Promise<ClusterTracksResponse | null> {
   try {
+    const body: Record<string, unknown> = { bpm, cluster_id: clusterId, topk };
+    if (artistNames?.length) body.artist_names = artistNames;
     const response = await fetch(`${API_BASE_URL}/tracks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bpm, cluster_id: clusterId, topk }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
