@@ -564,14 +564,39 @@
       <h2 class="section-title">Watch the demo</h2>
     </div>
 
-    <div class="video-wrapper">
+    <div class="video-wrapper" style="position:relative;">
       <video
+        id="demo-video"
         src="/demo.mp4"
-        controls
         playsinline
         tabindex="-1"
-        style="width:100%;height:100%;object-fit:cover;border-radius:24px;"
+        style="width:100%;height:100%;object-fit:cover;border-radius:24px;filter:blur(10px);transition:filter 0.6s ease;"
       ></video>
+
+      <!-- Blur overlay with play button -->
+      <div id="video-overlay" style="
+        position:absolute;inset:0;
+        display:flex;flex-direction:column;align-items:center;justify-content:center;
+        border-radius:24px;gap:16px;
+        background:rgba(10,10,10,0.35);
+        backdrop-filter:blur(2px);
+        cursor:pointer;
+        transition:opacity 0.5s ease;
+      " onclick="playDemo()">
+        <div style="
+          width:72px;height:72px;
+          background:var(--accent);
+          border-radius:50%;
+          display:flex;align-items:center;justify-content:center;
+          box-shadow:0 0 40px rgba(255,45,111,0.5);
+          transition:transform 0.2s;
+        " id="play-btn-circle">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="#000" style="margin-left:3px;">
+            <polygon points="5,3 19,12 5,21"/>
+          </svg>
+        </div>
+        <p style="color:rgba(255,255,255,0.7);font-size:0.88rem;letter-spacing:0.3px;">Click to play</p>
+      </div>
     </div>
   </section>
 
@@ -748,6 +773,39 @@
       } catch {
         note.textContent = 'Something went wrong — try again.';
       }
+    }
+
+    // Video blur reveal
+    function playDemo() {
+      const video = document.getElementById('demo-video');
+      const overlay = document.getElementById('video-overlay');
+      video.style.filter = 'blur(0px)';
+      overlay.style.opacity = '0';
+      overlay.style.pointerEvents = 'none';
+      video.controls = true;
+      video.play();
+    }
+
+    // Clear blur when demo section scrolls into view
+    const demoObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const video = document.getElementById('demo-video');
+          const overlay = document.getElementById('video-overlay');
+          // Soft reveal — unblur the video but keep overlay until user clicks
+          video.style.filter = 'blur(0px)';
+          demoObserver.disconnect();
+        }
+      });
+    }, { threshold: 0.4 });
+    demoObserver.observe(document.getElementById('demo'));
+
+    // Hover effect on play button
+    const playCircle = document.getElementById('play-btn-circle');
+    const videoOverlay = document.getElementById('video-overlay');
+    if (videoOverlay) {
+      videoOverlay.addEventListener('mouseenter', () => playCircle.style.transform = 'scale(1.1)');
+      videoOverlay.addEventListener('mouseleave', () => playCircle.style.transform = 'scale(1)');
     }
 
     // Intersection observer for scroll-triggered fade-ins
