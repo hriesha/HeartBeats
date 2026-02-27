@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HeartBeats — Music that moves with you</title>
+  <meta name="description" content="Real-time BPM matching for runners. Sync your playlist to your pace — automatically." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: #141414;
+      --border: #222;
+      --accent: #FF2D6F;
+      --accent2: #FF6B9D;
+      --text: #ffffff;
+      --muted: #888;
+      --radius: 16px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Poppins', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      padding: 20px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      backdrop-filter: blur(12px);
+      background: rgba(10,10,10,0.8);
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.3s;
+    }
+    nav.scrolled { border-color: var(--border); }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 1.1rem;
+      letter-spacing: -0.5px;
+    }
+
+    .pulse-icon {
+      width: 28px;
+      height: 28px;
+    }
+
+    .nav-cta {
+      background: var(--accent);
+      color: #000;
+      font-family: 'Poppins', sans-serif;
+      font-weight: 600;
+      font-size: 0.85rem;
+      padding: 10px 22px;
+      border-radius: 50px;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+      transition: transform 0.15s, background 0.15s;
+    }
+    .nav-cta:hover { transform: scale(1.04); background: #ff5c93; }
+
+    /* ── HERO ── */
+    #hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 120px 24px 80px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-glow {
+      position: absolute;
+      top: -120px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(ellipse, rgba(255,45,111,0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,45,111,0.1);
+      border: 1px solid rgba(255,45,111,0.3);
+      border-radius: 50px;
+      padding: 6px 16px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--accent);
+      margin-bottom: 28px;
+      letter-spacing: 0.3px;
+    }
+
+    .hero-title {
+      font-size: clamp(2.8rem, 7vw, 5.5rem);
+      font-weight: 800;
+      line-height: 1.05;
+      letter-spacing: -2px;
+      max-width: 800px;
+    }
+
+    .hero-title span {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      margin-top: 20px;
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      color: var(--muted);
+      max-width: 500px;
+      line-height: 1.6;
+      font-weight: 400;
+    }
+
+    .hero-actions {
+      margin-top: 40px;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+      font-family: 'Poppins', sans-serif;
+      font-weight: 600;
+      font-size: 0.95rem;
+      padding: 14px 32px;
+      border-radius: 50px;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 0 24px rgba(255,45,111,0.25);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 40px rgba(255,45,111,0.4); }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text);
+      font-family: 'Poppins', sans-serif;
+      font-weight: 500;
+      font-size: 0.95rem;
+      padding: 14px 32px;
+      border-radius: 50px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      text-decoration: none;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .btn-ghost:hover { border-color: #555; transform: translateY(-2px); }
+
+    /* Heartbeat line animation */
+    .heartbeat-line {
+      margin-top: 60px;
+      width: 100%;
+      max-width: 480px;
+      opacity: 0.4;
+    }
+
+    /* ── SECTION SHARED ── */
+    section {
+      padding: 100px 24px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 700;
+      letter-spacing: -1px;
+      line-height: 1.15;
+      margin-bottom: 16px;
+    }
+
+    .section-sub {
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.7;
+      max-width: 500px;
+    }
+
+    /* ── VIDEO ── */
+    #demo {
+      padding-top: 0;
+    }
+
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 380px;
+      margin: 0 auto;
+      background: var(--surface);
+      border-radius: 24px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      box-shadow: 0 40px 80px rgba(0,0,0,0.5);
+      aspect-ratio: 9/16;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ── Replace this entire .video-placeholder block with your video/iframe ── */
+    .video-placeholder {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #141414 0%, #1a1408 100%);
+      gap: 16px;
+      cursor: pointer;
+    }
+
+    .play-btn {
+      width: 72px;
+      height: 72px;
+      background: var(--accent);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 40px rgba(255,45,111,0.4);
+      transition: transform 0.2s;
+    }
+    .video-placeholder:hover .play-btn { transform: scale(1.1); }
+
+    .play-btn svg { margin-left: 4px; }
+
+    .video-placeholder p {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    /* ── HOW IT WORKS ── */
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2px;
+      margin-top: 60px;
+      background: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .step {
+      background: var(--surface);
+      padding: 40px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+    }
+
+    .step-number {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .step-icon { display: flex; align-items: center; }
+
+    .step h3 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+
+    .step p {
+      font-size: 0.88rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* ── FEATURES ── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      margin-top: 60px;
+    }
+
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .feature-card:hover { border-color: #333; transform: translateY(-3px); }
+
+    .feature-icon {
+      width: 44px;
+      height: 44px;
+      background: rgba(255,45,111,0.1);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.3rem;
+      margin-bottom: 16px;
+    }
+
+    .feature-card h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .feature-card p {
+      font-size: 0.87rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .badge-soon {
+      display: inline-block;
+      background: rgba(255,45,111,0.1);
+      border: 1px solid rgba(255,45,111,0.2);
+      color: var(--accent);
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    /* ── WAITLIST ── */
+    #waitlist {
+      padding: 100px 24px;
+    }
+
+    .waitlist-box {
+      max-width: 1100px;
+      margin: 0 auto;
+      background: linear-gradient(135deg, #141414 0%, #1a1408 60%, #141414 100%);
+      border: 1px solid rgba(255,45,111,0.2);
+      border-radius: 24px;
+      padding: 80px 48px;
+      text-align: center;
+      box-shadow: 0 0 60px rgba(255,45,111,0.06);
+    }
+
+    .waitlist-box .section-title { margin-bottom: 12px; }
+
+    .waitlist-box .section-sub {
+      margin: 0 auto 40px;
+      max-width: 400px;
+      text-align: center;
+    }
+
+    /* ── TALLY EMBED ──
+       When you're ready, go to tally.so, create your form,
+       click "Share" → "Embed" → copy the <iframe> or popup script.
+       Replace the .waitlist-form block below with that embed code.
+    ── */
+    .waitlist-form {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-width: 420px;
+      margin: 0 auto;
+      align-items: stretch;
+    }
+
+    .waitlist-input {
+      flex: 1;
+      min-width: 220px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      border-radius: 50px;
+      padding: 14px 22px;
+      color: #fff;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.92rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .waitlist-input::placeholder { color: var(--muted); }
+    .waitlist-input:focus { border-color: var(--accent); }
+
+    .waitlist-note {
+      margin-top: 16px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+      max-width: 100%;
+    }
+
+    .footer-logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    footer p {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 768px) {
+      nav { padding: 16px 20px; }
+
+      .steps {
+        grid-template-columns: 1fr;
+      }
+
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .waitlist-box {
+        padding: 48px 24px;
+      }
+
+      footer {
+        flex-direction: column;
+        text-align: center;
+        padding: 24px 20px;
+      }
+    }
+
+    /* ── ANIMATIONS ── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .fade-up { opacity: 0; animation: fadeUp 0.7s ease forwards; }
+    .fade-up.d1 { animation-delay: 0.1s; }
+    .fade-up.d2 { animation-delay: 0.25s; }
+    .fade-up.d3 { animation-delay: 0.4s; }
+    .fade-up.d4 { animation-delay: 0.55s; }
+
+    @keyframes pulse-ring {
+      0%   { transform: scale(1);   opacity: 0.6; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+
+    .live-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      position: relative;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    .live-dot::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse-ring 1.5s ease-out infinite;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── NAV ── -->
+  <nav id="nav">
+    <div class="nav-logo">
+      <svg class="pulse-icon" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M2 14h4l3-8 4 16 3-10 2 4 3-2h5" stroke="#FF2D6F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      HeartBeats
+    </div>
+    <a href="#waitlist" class="nav-cta">Join waitlist</a>
+  </nav>
+
+  <!-- ── HERO ── -->
+  <section id="hero">
+    <div class="hero-glow"></div>
+
+    <div class="hero-badge fade-up d1">
+      <span class="live-dot"></span>
+      Now in early access
+    </div>
+
+    <h1 class="hero-title fade-up d2">
+      Music that<br /><span>moves with you.</span>
+    </h1>
+
+    <p class="hero-sub fade-up d3">
+      Real-time BPM matching for runners. Sync your playlist to your pace — automatically.
+    </p>
+
+    <div class="hero-actions fade-up d4">
+      <a href="#waitlist" class="btn-primary">Join the waitlist</a>
+      <a href="#demo" class="btn-ghost">Watch the demo ↓</a>
+    </div>
+
+    <svg class="heartbeat-line fade-up d4" viewBox="0 0 480 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 30 H100 L115 10 L130 50 L145 5 L160 55 L175 25 L190 35 H240 H480"
+            stroke="#FF2D6F" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+    </svg>
+  </section>
+
+  <!-- ── DEMO VIDEO ── -->
+  <section id="demo" style="padding-top: 0;">
+    <div style="text-align:center; margin-bottom: 48px;">
+      <p class="section-label">See it in action</p>
+      <h2 class="section-title">Watch the demo</h2>
+    </div>
+
+    <div class="video-wrapper">
+      <video
+        src="/demo.mp4"
+        controls
+        playsinline
+        tabindex="-1"
+        style="width:100%;height:100%;object-fit:cover;border-radius:24px;"
+      ></video>
+    </div>
+  </section>
+
+  <!-- ── HOW IT WORKS ── -->
+  <section id="how">
+    <p class="section-label">Simple by design</p>
+    <h2 class="section-title">How it works</h2>
+    <p class="section-sub">Three steps between you and the perfect running playlist.</p>
+
+    <div class="steps">
+      <div class="step">
+        <span class="step-number">Step 01</span>
+        <div class="step-icon">
+          <!-- running figure -->
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="#FF2D6F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="22" cy="6" r="2.5"/>
+            <path d="M20 10l-4 6 5 4-3 8"/>
+            <path d="M16 16l-4 3"/>
+            <path d="M18 28l4-3 4 3"/>
+          </svg>
+        </div>
+        <h3>Set your pace</h3>
+        <p>Enter your target pace or let your Apple Watch detect your cadence automatically.</p>
+      </div>
+      <div class="step">
+        <span class="step-number">Step 02</span>
+        <div class="step-icon">
+          <!-- headphones -->
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="#FF2D6F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M7 20v-3a11 11 0 0 1 22 0v3"/>
+            <rect x="5" y="20" width="5" height="8" rx="2"/>
+            <rect x="26" y="20" width="5" height="8" rx="2"/>
+          </svg>
+        </div>
+        <h3>Pick your vibe</h3>
+        <p>Choose a genre — House, Hip-Hop, Pop, Rock, and more. Filter by your favourite artists.</p>
+      </div>
+      <div class="step">
+        <span class="step-number">Step 03</span>
+        <div class="step-icon">
+          <!-- heart pulse -->
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="#FF2D6F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 30S6 22 6 13a7 7 0 0 1 12-4.9A7 7 0 0 1 30 13c0 9-12 17-12 17z"/>
+            <path d="M10 18h3l2-4 3 8 2-4h4"/>
+          </svg>
+        </div>
+        <h3>Run to the beat</h3>
+        <p>A curated playlist matched exactly to your BPM, refreshed dynamically as you run.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FEATURES ── -->
+  <section id="features" style="padding-top: 0;">
+    <p class="section-label">Built for runners</p>
+    <h2 class="section-title">Everything you need</h2>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">
+          <!-- waveform / BPM -->
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FF2D6F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 12h3l2-6 3 12 2-8 2 4 2-2h4"/>
+          </svg>
+        </div>
+        <h3>Precision BPM matching</h3>
+        <p>Every track is matched within ±10 BPM of your running cadence. No more songs that break your stride.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <!-- person / artist -->
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FF2D6F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="7" r="3.5"/>
+            <path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>
+            <path d="M15 11l2 2 4-4"/>
+          </svg>
+        </div>
+        <h3>Artist filter</h3>
+        <p>Select up to 5 artists and we'll find their tracks that hit your exact tempo. Your music, your pace.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <!-- watch face -->
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FF2D6F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="7" y="4" width="10" height="16" rx="4"/>
+            <path d="M9 4V2h6v2"/>
+            <path d="M9 20v2h6v-2"/>
+            <path d="M12 9v3l2 1.5"/>
+          </svg>
+        </div>
+        <h3>Apple Watch sync <span class="badge-soon">soon</span></h3>
+        <p>Live heart rate and cadence from your Apple Watch — skip manual input and let the app adapt in real-time.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <!-- music note -->
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FF2D6F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18V6l12-2v12"/>
+            <circle cx="6" cy="18" r="3"/>
+            <circle cx="18" cy="16" r="3"/>
+          </svg>
+        </div>
+        <h3>Apple Music <span class="badge-soon" style="background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.15);color:#888;">Spotify soon</span></h3>
+        <p>Stream directly through your Apple Music subscription. Spotify support coming soon.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── WAITLIST ── -->
+  <div id="waitlist">
+    <div class="waitlist-box">
+      <p class="section-label" style="text-align:center;">Early access</p>
+      <h2 class="section-title">Be first to run with it.</h2>
+      <p class="section-sub">Join the waitlist and get early access before the public launch. No spam, ever.</p>
+
+      <div class="waitlist-form">
+        <input class="waitlist-input" id="waitlist-email" type="email" placeholder="your@email.com" />
+        <textarea class="waitlist-input" id="waitlist-message" placeholder="anything you want to say?" rows="3" style="border-radius:16px;resize:none;padding:14px 22px;line-height:1.5;"></textarea>
+        <a href="#waitlist" class="btn-primary" style="white-space:nowrap;" onclick="handleWaitlist(event)">Notify me</a>
+      </div>
+      <p class="waitlist-note" id="waitlist-note">No spam. Unsubscribe anytime.</p>
+    </div>
+  </div>
+
+  <!-- ── FOOTER ── -->
+  <footer>
+    <div class="footer-logo">
+      <svg width="22" height="22" viewBox="0 0 28 28" fill="none">
+        <path d="M2 14h4l3-8 4 16 3-10 2 4 3-2h5" stroke="#FF2D6F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      HeartBeats
+    </div>
+    <p>© 2026 HeartBeats. All rights reserved.</p>
+    <a href="https://hriesha.github.io/about" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:0.82rem;text-decoration:none;transition:color 0.2s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">About the Founder</a>
+  </footer>
+
+  <script>
+    history.scrollRestoration = 'manual';
+    window.scrollTo(0, 0);
+    window.addEventListener('load', () => {
+      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    });
+
+    // Scroll-triggered nav border
+    const nav = document.getElementById('nav');
+    window.addEventListener('scroll', () => {
+      nav.classList.toggle('scrolled', window.scrollY > 40);
+    });
+
+    async function handleWaitlist(e) {
+      e.preventDefault();
+      const input = document.getElementById('waitlist-email');
+      const note = document.getElementById('waitlist-note');
+      if (!input || !input.value.includes('@')) {
+        input.style.borderColor = '#ff4444';
+        setTimeout(() => input.style.borderColor = '', 1000);
+        return;
+      }
+      try {
+        const message = document.getElementById('waitlist-message');
+        const res = await fetch('https://formspree.io/f/mqednvwd', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ email: input.value, message: message?.value || '' }),
+        });
+        if (res.ok) {
+          input.value = '';
+          input.placeholder = "✓ You're on the list!";
+          input.style.borderColor = 'var(--accent)';
+          note.textContent = "We'll be in touch soon.";
+        } else {
+          note.textContent = 'Something went wrong — try again.';
+        }
+      } catch {
+        note.textContent = 'Something went wrong — try again.';
+      }
+    }
+
+    // Intersection observer for scroll-triggered fade-ins
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.style.opacity = '1';
+          entry.target.style.transform = 'translateY(0)';
+          entry.target.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+        }
+      });
+    }, { threshold: 0.1 });
+
+    document.querySelectorAll('.step, .feature-card').forEach(el => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(20px)';
+      observer.observe(el);
+    });
+  </script>
+</body>
+</html>
