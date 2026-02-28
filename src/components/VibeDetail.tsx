@@ -1,19 +1,21 @@
 import { motion } from 'motion/react';
-import { ChevronLeft, Play, Pause, Music, SkipForward, MessageCircle } from 'lucide-react';
+import { ChevronLeft, Play, Pause, Music, SkipForward, MessageCircle, Heart } from 'lucide-react';
 import { FeedbackModal } from './FeedbackModal';
 import { VibeType } from '../App';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getClusterTracks, resolveAppleMusicIds, Track } from '../utils/api';
 import { useMusicKitPlayer } from '../hooks/useMusicKitPlayer';
+import { useHeartRate } from '../hooks/useHeartRate';
 
 interface VibeDetailProps {
   vibe: VibeType;
   bpm?: number;
+  watchMode?: boolean;
   artistNames?: string[];
   onBack: () => void;
 }
 
-export function VibeDetail({ vibe, bpm = 120, artistNames, onBack }: VibeDetailProps) {
+export function VibeDetail({ vibe, bpm = 120, watchMode = false, artistNames, onBack }: VibeDetailProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [nowPlayingIndex, setNowPlayingIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -27,6 +29,31 @@ export function VibeDetail({ vibe, bpm = 120, artistNames, onBack }: VibeDetailP
   const fetchingReservesRef = useRef(false);
   const lastExtendedForRef = useRef<number>(-1);
 
+  // Live heart rate (Apple Watch)
+  const heartRate = useHeartRate();
+  const [activeBpm, setActiveBpm] = useState(bpm);
+  const activeBpmRef = useRef(bpm);
+  const bpmRefreshCooldownRef = useRef(false);
+
+  useEffect(() => {
+    if (!watchMode) return;
+    heartRate.startPolling();
+    return () => heartRate.stopPolling();
+  }, [watchMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!watchMode || heartRate.bpm === null) return;
+    if (bpmRefreshCooldownRef.current) return;
+    if (Math.abs(heartRate.bpm - activeBpmRef.current) <= 10) return;
+
+    // BPM shifted by more than 10 — refresh the reserve queue with new BPM
+    activeBpmRef.current = heartRate.bpm;
+    setActiveBpm(heartRate.bpm);
+    reserveRef.current = [];
+    bpmRefreshCooldownRef.current = true;
+    setTimeout(() => { bpmRefreshCooldownRef.current = false; }, 15000);
+  }, [heartRate.bpm, watchMode]);
+
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { nowPlayingIndexRef.current = nowPlayingIndex; }, [nowPlayingIndex]);
 
@@ -35,7 +62,7 @@ export function VibeDetail({ vibe, bpm = 120, artistNames, onBack }: VibeDetailP
     if (fetchingReservesRef.current) return;
     fetchingReservesRef.current = true;
     try {
-      const result = await getClusterTracks(clusterId, bpm, 50, artistNames);
+      const result = await getClusterTracks(clusterId, activeBpmRef.current, 50, artistNames);
       if (!result?.tracks?.length) return;
       // Filter out tracks already in queue
       const queueIds = new Set(tracksRef.current.map(t => t.track_id ?? t.id));
@@ -47,7 +74,7 @@ export function VibeDetail({ vibe, bpm = 120, artistNames, onBack }: VibeDetailP
     } finally {
       fetchingReservesRef.current = false;
     }
-  }, [clusterId, bpm]);
+  }, [clusterId, artistNames]);
 
   // Add exactly 1 track to the END of the queue
   const extendQueue = useCallback(() => {
@@ -112,7 +139,7 @@ export function VibeDetail({ vibe, bpm = 120, artistNames, onBack }: VibeDetailP
       setIsLoading(true);
       setError(null);
       try {
-        const clusterData = await getClusterTracks(clusterId, bpm, 50, artistNames);
+        const clusterData = await getClusterTracks(clusterId, activeBpmRef.current, 50, artistNames);
         if (!clusterData?.tracks?.length) {
           setError('No tracks found for this cluster. Try another vibe.');
           return;
@@ -288,13 +315,26 @@ export function VibeDetail({ vibe, bpm = 120, artistNames, onBack }: VibeDetailP
               </p>
             )}
           </div>
-          <div style={{
-            width: 40, height: 40, borderRadius: '10px',
-            background: 'rgba(255, 45, 85, 0.12)', border: '1px solid rgba(255, 45, 85, 0.25)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Music style={{ width: 18, height: 18, color: '#FF2D55' }} />
-          </div>
+          {watchMode && heartRate.bpm !== null ? (
+            <div style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              background: 'rgba(255, 45, 85, 0.12)', border: '1px solid rgba(255, 45, 85, 0.25)',
+              borderRadius: '10px', padding: '6px 10px', minWidth: 48,
+            }}>
+              <Heart style={{ width: 12, height: 12, color: '#FF2D55', marginBottom: 2 }} />
+              <span style={{ fontFamily: 'var(--font-heading)', fontSize: '16px', fontWeight: 300, color: '#ffffff', lineHeight: 1 }}>
+                {activeBpm}
+              </span>
+            </div>
+          ) : (
+            <div style={{
+              width: 40, height: 40, borderRadius: '10px',
+              background: 'rgba(255, 45, 85, 0.12)', border: '1px solid rgba(255, 45, 85, 0.25)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Music style={{ width: 18, height: 18, color: '#FF2D55' }} />
+            </div>
+          )}
         </motion.div>
       </div>
 
