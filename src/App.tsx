@@ -10,7 +10,7 @@ import { WorkoutSelection } from './components/WorkoutSelection';
 import { VibeSelection } from './components/VibeSelection';
 import { ArtistSelection } from './components/ArtistSelection';
 import { VibeDetail } from './components/VibeDetail';
-import { TrackerConnected } from './components/TrackerConnected';
+import { AppleWatchConnect } from './components/AppleWatchConnect';
 
 export type VibeType = {
   id: string;
@@ -22,12 +22,13 @@ export type VibeType = {
 };
 
 export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<'loading' | 'connect' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'artist' | 'detail' | 'trackerConnected'>('loading');
+  const [currentScreen, setCurrentScreen] = useState<'loading' | 'connect' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'artist' | 'detail' | 'appleWatchConnect'>('loading');
   const [selectedBPM, setSelectedBPM] = useState(120);
   const [paceValue, setPaceValue] = useState(10.0);
   const [paceUnit, setPaceUnit] = useState<'min/mile' | 'min/km'>('min/mile');
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
   const [selectedArtists, setSelectedArtists] = useState<string[]>([]);
+  const [watchMode, setWatchMode] = useState(false);
 
   // Configure native status bar
   useEffect(() => {
@@ -108,11 +109,12 @@ export default function App() {
   };
 
   const handleSelectWatch = () => {
-    setCurrentScreen('trackerConnected');
+    setWatchMode(true);
+    setCurrentScreen('appleWatchConnect');
   };
 
-  const handleTrackerConnected = () => {
-    setSelectedBPM(125);
+  const handleWatchConnected = (initialBpm: number) => {
+    setSelectedBPM(initialBpm);
     setCurrentScreen('vibe');
   };
 
@@ -166,6 +168,9 @@ export default function App() {
       setCurrentScreen('bpm');
     } else if (currentScreen === 'bpm') {
       setCurrentScreen('controlOptions');
+    } else if (currentScreen === 'appleWatchConnect') {
+      setWatchMode(false);
+      setCurrentScreen('controlOptions');
     } else if (currentScreen === 'controlOptions') {
       setCurrentScreen('connect');
     }
@@ -190,8 +195,8 @@ export default function App() {
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}
         {currentScreen === 'vibe' && <VibeSelection paceValue={paceValue} paceUnit={paceUnit} bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
         {currentScreen === 'artist' && selectedVibe && <ArtistSelection vibe={selectedVibe} onArtistSelect={handleArtistSelect} onBack={handleBack} />}
-        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} artistNames={selectedArtists.length ? selectedArtists : undefined} onBack={handleBack} />}
-        {currentScreen === 'trackerConnected' && <TrackerConnected onComplete={handleTrackerConnected} />}
+        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} watchMode={watchMode} artistNames={selectedArtists.length ? selectedArtists : undefined} onBack={handleBack} />}
+        {currentScreen === 'appleWatchConnect' && <AppleWatchConnect onConnected={handleWatchConnected} onBack={handleBack} />}
       </div>
     </div>
   );
