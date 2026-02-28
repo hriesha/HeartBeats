@@ -9,7 +9,7 @@ interface ControlOptionsProps {
   onBack?: () => void;
 }
 
-export function ControlOptions({ onSelectCustom, onSelectWatch: _, onBack }: ControlOptionsProps) {
+export function ControlOptions({ onSelectCustom, onSelectWatch, onBack }: ControlOptionsProps) {
   const [showFeedback, setShowFeedback] = useState(false);
 
   return (
@@ -111,55 +111,48 @@ export function ControlOptions({ onSelectCustom, onSelectWatch: _, onBack }: Con
           </div>
         </motion.button>
 
-        {/* Connect Watch — Coming Soon */}
-        <div
+        {/* Connect Watch */}
+        <motion.button
+          onClick={onSelectWatch}
           style={{
             width: '100%',
             padding: '28px 24px',
             borderRadius: '16px',
-            background: 'rgba(255, 255, 255, 0.02)',
-            border: '1px solid rgba(255, 255, 255, 0.05)',
+            background: 'rgba(255, 255, 255, 0.03)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             gap: '20px',
             textAlign: 'left',
-            opacity: 0.5,
-            position: 'relative',
           }}
+          whileHover={{ scale: 1.02, borderColor: 'rgba(255, 45, 85, 0.3)', background: 'rgba(255, 45, 85, 0.05)' }}
+          whileTap={{ scale: 0.98 }}
         >
           <div
             style={{
               width: 48,
               height: 48,
               borderRadius: '12px',
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              background: 'rgba(255, 45, 85, 0.1)',
+              border: '1px solid rgba(255, 45, 85, 0.2)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               flexShrink: 0,
             }}
           >
-            <Watch style={{ width: 22, height: 22, color: 'rgba(255,255,255,0.4)' }} />
+            <Watch style={{ width: 22, height: 22, color: '#FF2D55' }} />
           </div>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <h2 style={{ fontFamily: 'var(--font-body)', fontSize: '16px', fontWeight: 500, color: '#ffffff' }}>
-                connect your watch
-              </h2>
-              <span style={{
-                fontFamily: 'var(--font-body)', fontSize: '10px', fontWeight: 500,
-                color: '#FF2D55', background: 'rgba(255, 45, 85, 0.15)',
-                padding: '2px 8px', borderRadius: '10px', letterSpacing: '0.05em',
-              }}>
-                coming soon
-              </span>
-            </div>
+            <h2 style={{ fontFamily: 'var(--font-body)', fontSize: '16px', fontWeight: 500, color: '#ffffff', marginBottom: 4 }}>
+              connect apple watch
+            </h2>
             <p style={{ fontFamily: 'var(--font-body)', fontSize: '13px', color: 'rgba(255,255,255,0.4)', fontWeight: 300 }}>
-              sync with your fitness tracker
+              sync music to your live heart rate
             </p>
           </div>
-        </div>
+        </motion.button>
       </div>
 
       {/* Feedback Button */}
