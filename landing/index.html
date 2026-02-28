@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>HeartBeats — Music that moves with you</title>
-  <meta name="description" content="Real-time BPM matching for runners. Sync your playlist to your pace — automatically." />
+  <meta name="description" content="Real-time BPM matching for any workout. Sync your playlist to your pace — automatically." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -479,6 +479,67 @@
       }
     }
 
+    /* ── WORKOUT SECTION ── */
+    .workout-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 64px;
+      align-items: center;
+      margin-top: 0;
+    }
+
+    .workout-phone {
+      position: relative;
+      max-width: 280px;
+      margin: 0 auto;
+    }
+
+    .workout-phone img {
+      width: 100%;
+      border-radius: 36px;
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 40px 80px rgba(0,0,0,0.6), 0 0 60px rgba(255,45,111,0.08);
+      display: block;
+    }
+
+    .workout-list {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 28px;
+    }
+
+    .workout-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: rgba(255,255,255,0.75);
+      transition: border-color 0.2s;
+    }
+    .workout-pill:hover { border-color: rgba(255,45,111,0.3); }
+
+    .workout-pill .pill-bpm {
+      margin-left: auto;
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    @media (max-width: 768px) {
+      .workout-split {
+        grid-template-columns: 1fr;
+        gap: 40px;
+      }
+      .workout-phone { max-width: 220px; }
+      .workout-list { grid-template-columns: 1fr 1fr; }
+    }
+
     /* ── ANIMATIONS ── */
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(24px); }
@@ -543,7 +604,7 @@
     </h1>
 
     <p class="hero-sub fade-up d3">
-      Real-time BPM matching for runners. Sync your playlist to your pace — automatically.
+      Real-time BPM matching for any workout. Sync your playlist to your pace — automatically.
     </p>
 
     <div class="hero-actions fade-up d4">
@@ -600,11 +661,48 @@
     </div>
   </section>
 
+  <!-- ── WORKOUT TYPES ── -->
+  <section id="workouts">
+    <div class="workout-split">
+      <div class="workout-phone">
+        <img src="/workout-selection.png" alt="HeartBeats workout selection screen showing jogging, cycling, strength, swimming, HIIT and yoga" />
+      </div>
+      <div>
+        <p class="section-label">Not just for runners</p>
+        <h2 class="section-title">Any workout.<br />Any pace.</h2>
+        <p class="section-sub" style="margin-bottom: 0;">Don't know your BPM? Just pick your activity — each workout has its own optimal tempo range, and HeartBeats handles the rest.</p>
+
+        <div class="workout-list">
+          <div class="workout-pill">
+            <span>🏃</span> Jogging <span class="pill-bpm">120–140</span>
+          </div>
+          <div class="workout-pill">
+            <span>🚴</span> Cycling <span class="pill-bpm">110–130</span>
+          </div>
+          <div class="workout-pill">
+            <span>🏋️</span> Strength <span class="pill-bpm">100–120</span>
+          </div>
+          <div class="workout-pill">
+            <span>🏊</span> Swimming <span class="pill-bpm">130–150</span>
+          </div>
+          <div class="workout-pill">
+            <span>⚡</span> HIIT <span class="pill-bpm">150–170</span>
+          </div>
+          <div class="workout-pill">
+            <span>🌿</span> Yoga <span class="pill-bpm">80–100</span>
+          </div>
+        </div>
+
+        <p style="margin-top: 20px; font-size: 0.8rem; color: var(--muted);">More workout types and focus modes coming soon.</p>
+      </div>
+    </div>
+  </section>
+
   <!-- ── HOW IT WORKS ── -->
   <section id="how">
     <p class="section-label">Simple by design</p>
     <h2 class="section-title">How it works</h2>
-    <p class="section-sub">Three steps between you and the perfect running playlist.</p>
+    <p class="section-sub">Three steps between you and the perfect workout playlist.</p>
 
     <div class="steps">
       <div class="step">
@@ -619,7 +717,7 @@
           </svg>
         </div>
         <h3>Set your pace</h3>
-        <p>Enter your target pace or let your Apple Watch detect your cadence automatically.</p>
+        <p>Pick a workout type, enter your pace, or let your Apple Watch detect your cadence automatically.</p>
       </div>
       <div class="step">
         <span class="step-number">Step 02</span>
@@ -643,15 +741,15 @@
             <path d="M10 18h3l2-4 3 8 2-4h4"/>
           </svg>
         </div>
-        <h3>Run to the beat</h3>
-        <p>A curated playlist matched exactly to your BPM, refreshed dynamically as you run.</p>
+        <h3>Move to the beat</h3>
+        <p>A curated playlist matched exactly to your BPM, refreshed dynamically as your intensity changes.</p>
       </div>
     </div>
   </section>
 
   <!-- ── FEATURES ── -->
   <section id="features" style="padding-top: 0;">
-    <p class="section-label">Built for runners</p>
+    <p class="section-label">Built for every workout</p>
     <h2 class="section-title">Everything you need</h2>
 
     <div class="features-grid">
