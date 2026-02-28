@@ -47,5 +47,7 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSHealthShareUsageDescription</key>
+	<string>HeartBeats reads your heart rate to match music to your workout intensity in real time.</string>
 </dict>
 </plist>
