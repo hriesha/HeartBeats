@@ -171,6 +171,7 @@ export function PaceSelection({ onSubmit, onChooseWorkout, onBack }: PaceSelecti
               cursor: 'pointer',
               background: `linear-gradient(to right, #FF2D55 0%, #FF2D55 ${((paceValue - minValue) / (maxValue - minValue)) * 100}%, rgba(255, 255, 255, 0.1) ${((paceValue - minValue) / (maxValue - minValue)) * 100}%, rgba(255, 255, 255, 0.1) 100%)`,
               outline: 'none',
+              touchAction: 'none',
             }}
           />
           <style>{`

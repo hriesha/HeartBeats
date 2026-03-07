@@ -12,6 +12,7 @@ export interface Cluster {
   tags: string[];
   mean_tempo: number;
   track_count: number;
+  top_artists?: string[];
 }
 
 export interface Track {
@@ -73,12 +74,12 @@ export async function checkHealth(): Promise<boolean> {
 export async function runClustering(
   paceValue: number,
   paceUnit: 'min/mile' | 'min/km',
+  bpm?: number,
 ): Promise<ClusteringResponse | null> {
   try {
-    const body: any = {
-      pace_value: paceValue,
-      pace_unit: paceUnit,
-    };
+    const body: any = bpm !== undefined
+      ? { bpm }
+      : { pace_value: paceValue, pace_unit: paceUnit };
 
     const response = await fetch(`${API_BASE_URL}/clusters`, {
       method: 'POST',
@@ -157,6 +158,7 @@ export async function runClustering(
         tags: backendTags !== undefined ? backendTags : fallbackTags,
         mean_tempo: meanTempo,
         track_count: Number(c.count ?? c.track_count ?? 0),
+        top_artists: Array.isArray(c.top_artists) ? c.top_artists : [],
       };
     });
 
@@ -173,13 +175,16 @@ export async function runClustering(
 export async function getClusterTracks(
   clusterId: number,
   bpm: number,
-  topk: number = 10
+  topk: number = 10,
+  artistNames?: string[],
 ): Promise<ClusterTracksResponse | null> {
   try {
+    const body: Record<string, unknown> = { bpm, cluster_id: clusterId, topk };
+    if (artistNames?.length) body.artist_names = artistNames;
     const response = await fetch(`${API_BASE_URL}/tracks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bpm, cluster_id: clusterId, topk }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -211,11 +216,13 @@ export async function getTracksFromTrack(
   clusterId?: number,
   topk: number = 10,
   excludeIds?: string[],
+  artistNames?: string[],
 ): Promise<ClusterTracksResponse | null> {
   try {
     const body: Record<string, unknown> = { track_id: trackId, topk };
     if (clusterId != null) body.cluster_id = clusterId;
     if (excludeIds?.length) body.exclude_ids = excludeIds;
+    if (artistNames?.length) body.artist_names = artistNames;
     const response = await fetch(`${API_BASE_URL}/tracks/from-track`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -268,6 +275,46 @@ export async function getTrackDetails(trackIds: string[]): Promise<TrackDetailsR
 
 // In-memory cache for resolved Apple Music IDs
 const _appleMusicIdCache = new Map<string, string>();
+
+/**
+ * Search Apple Music catalog for artists matching a query.
+ * Returns up to 8 results with name and optional artwork URL.
+ */
+export async function searchArtists(
+  query: string
+): Promise<Array<{ name: string; artworkUrl?: string }>> {
+  if (!query.trim()) return [];
+  try {
+    const music = window.MusicKit?.getInstance?.();
+    const storefront = music?.storefrontId || 'us';
+    const devToken = import.meta.env.VITE_APPLE_MUSIC_DEVELOPER_TOKEN;
+    if (!devToken) return [];
+    const userToken = (music as any)?.musicUserToken || '';
+    const params = new URLSearchParams({ term: query, types: 'artists', limit: '8' });
+    const headers: Record<string, string> = { Authorization: `Bearer ${devToken}` };
+    if (userToken) headers['Music-User-Token'] = userToken;
+    const resp = await fetch(
+      `https://api.music.apple.com/v1/catalog/${storefront}/search?${params}`,
+      { headers }
+    );
+    if (!resp.ok) return [];
+    const json = await resp.json();
+    const artists: any[] = json?.results?.artists?.data ?? [];
+    return artists
+      .map(a => {
+        const artwork = a.attributes?.artwork;
+        let artworkUrl: string | undefined;
+        if (artwork?.url) {
+          artworkUrl = artwork.url.replace('{w}', '56').replace('{h}', '56');
+        }
+        return { name: a.attributes?.name || '', artworkUrl };
+      })
+      .filter(a => a.name);
+  } catch (e) {
+    console.warn('Artist search failed:', e);
+    return [];
+  }
+}
 
 /**
  * Resolve a track name + artist to an Apple Music catalog ID.

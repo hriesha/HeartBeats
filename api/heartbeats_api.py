@@ -13,6 +13,7 @@ import logging
 import math
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional
 
 from flask import Flask, request, jsonify
@@ -53,6 +54,10 @@ _deezer = DeezerClient()
 # Cache: "vibe_id:bpm" -> (timestamp, list of tracks)
 _vibe_tracks_cache: Dict[str, tuple] = {}
 _VIBE_CACHE_TTL = 300  # 5 min — keeps BPM analysis cached but rotates songs
+
+# Cache: "bpm" -> (timestamp, cluster_stats list)
+_cluster_stats_cache: Dict[str, tuple] = {}
+_CLUSTER_CACHE_TTL = 600  # 10 min
 
 
 # =============================================================================
@@ -145,16 +150,15 @@ def _fetch_vibe_tracks(
 
     all_tracks: Dict[int, Dict] = {}  # dedup by Deezer track ID
 
-    # Source 1: Chart tracks (most popular first)
+    # Source 1: Chart tracks (popular, current hits)
     chart_tracks = _deezer.get_chart_tracks(genre_id, limit=50)
     for dt in chart_tracks:
         tid = dt.get("id")
         if tid and tid not in all_tracks:
             all_tracks[tid] = dt
 
-    # Source 2: BPM-filtered search — use top 2 keywords (most popular results)
-    picked_keywords = vibe.get("search_keywords", [])[:2]
-    for keyword in picked_keywords:
+    # Source 2: BPM-filtered search
+    for keyword in vibe.get("search_keywords", [])[:2]:
         results, _ = _deezer.search_tracks_by_bpm(
             keyword, bpm_min, bpm_max, limit=40
         )
@@ -189,6 +193,12 @@ def _fetch_vibe_tracks(
         title = dt.get("title", dt.get("title_short", ""))
         artist = dt.get("artist", {}).get("name", "")
         if not _is_likely_english(title) or not _is_likely_english(artist):
+            continue
+
+        # Skip obscure/regional tracks — Deezer rank is a popularity score
+        # Mainstream hits typically have rank > 100,000
+        deezer_rank = dt.get("rank", 0) or 0
+        if deezer_rank > 0 and deezer_rank < 50000:
             continue
 
         artist_name = artist.lower()
@@ -248,6 +258,45 @@ def apple_music_developer_token():
     return jsonify({"success": True, "developer_token": token})
 
 
+def _fetch_one_cluster_stats(vibe: Dict, target_bpm: float) -> Dict:
+    """Fetch chart tracks for a single vibe and build its cluster stats dict."""
+    chart_tracks = _deezer.get_chart_tracks(vibe["genre_id"], limit=50)
+    track_count = max(len(chart_tracks), 30)
+
+    top_artist_names: List[str] = []
+    seen: set = set()
+    for ct in chart_tracks:
+        aname = ct.get("artist", {}).get("name", "")
+        if aname and aname not in seen:
+            seen.add(aname)
+            top_artist_names.append(aname)
+        if len(top_artist_names) >= 10:
+            break
+
+    # Supplement from genre artist list if chart didn't give us 10
+    if len(top_artist_names) < 10:
+        genre_artists = _deezer.get_genre_artists(vibe["genre_id"])
+        for artist in genre_artists:
+            aname = artist.get("name", "")
+            if aname and aname not in seen:
+                seen.add(aname)
+                top_artist_names.append(aname)
+            if len(top_artist_names) >= 10:
+                break
+
+    return {
+        "cluster_id": vibe["vibe_id"],
+        "count": track_count,
+        "mean_tempo": target_bpm,
+        "mean_energy": 0.6,
+        "mean_danceability": 0.6,
+        "name": vibe["name"],
+        "top_artists": top_artist_names,
+        "tags": vibe["tags"],
+        "color": vibe["color"],
+    }
+
+
 @app.route('/api/clusters', methods=['POST'])
 def get_clusters():
     """Return genre-based vibes for the given BPM."""
@@ -261,40 +310,30 @@ def get_clusters():
                 "error": "Must provide either 'bpm' or 'pace_value' + 'pace_unit'",
             }), 400
 
-        vibes = get_vibes_for_bpm(target_bpm)
-        bpm_min = int(target_bpm - BPM_TOLERANCE)
-        bpm_max = int(target_bpm + BPM_TOLERANCE)
+        # Check cluster stats cache
+        cache_key = str(int(target_bpm))
+        cached = _cluster_stats_cache.get(cache_key)
+        now = time.time()
+        if cached and (now - cached[0]) < _CLUSTER_CACHE_TTL:
+            cluster_stats = cached[1]
+        else:
+            vibes = get_vibes_for_bpm(target_bpm)
+            # Fetch all vibes in parallel — each just needs one chart API call
+            cluster_stats = []
+            with ThreadPoolExecutor(max_workers=len(vibes)) as executor:
+                futures = {
+                    executor.submit(_fetch_one_cluster_stats, v, target_bpm): v
+                    for v in vibes
+                }
+                for future in as_completed(futures):
+                    try:
+                        cluster_stats.append(future.result())
+                    except Exception as e:
+                        log.error(f"Error fetching cluster stats: {e}")
 
-        cluster_stats = []
-        for vibe in vibes:
-            # Quick chart fetch (cached) for track count + top artists
-            chart_tracks = _deezer.get_chart_tracks(vibe["genre_id"], limit=50)
-            _, search_total = _deezer.search_tracks_by_bpm(
-                vibe["search_keywords"][0], bpm_min, bpm_max, limit=1,
-            )
-            track_count = max(len(chart_tracks), search_total, 30)
-
-            top_artist_names = []
-            seen = set()
-            for ct in chart_tracks[:20]:
-                aname = ct.get("artist", {}).get("name", "")
-                if aname and aname not in seen:
-                    seen.add(aname)
-                    top_artist_names.append(aname)
-                if len(top_artist_names) >= 3:
-                    break
-
-            cluster_stats.append({
-                "cluster_id": vibe["vibe_id"],
-                "count": track_count,
-                "mean_tempo": target_bpm,
-                "mean_energy": 0.6,
-                "mean_danceability": 0.6,
-                "name": vibe["name"],
-                "top_artists": top_artist_names,
-                "tags": vibe["tags"],
-                "color": vibe["color"],
-            })
+            # Keep consistent ordering
+            cluster_stats.sort(key=lambda c: c["cluster_id"])
+            _cluster_stats_cache[cache_key] = (now, cluster_stats)
 
         return jsonify({
             "success": True,
@@ -336,17 +375,57 @@ def get_tracks():
             vibes = get_vibes_for_bpm(target_bpm)
             vibe = vibes[0] if vibes else VIBE_DEFINITIONS[0]
 
-        # Check cache (with TTL)
-        cache_key = f"{vibe['vibe_id']}:{int(target_bpm)}"
-        cached = _vibe_tracks_cache.get(cache_key)
-        now = time.time()
+        artist_names = data.get("artist_names", [])
 
-        if cached and (now - cached[0]) < _VIBE_CACHE_TTL and len(cached[1]) >= topk:
-            tracks = cached[1][:topk]
+        if artist_names:
+            # Fetch directly from each selected artist — don't rely on the generic pool
+            all_artist_tracks: Dict[int, Dict] = {}
+            for aname in artist_names:
+                artist = _deezer.search_artist(aname)
+                if not artist:
+                    continue
+                artist_id = artist.get("id")
+                if not artist_id:
+                    continue
+                a_tracks = _deezer.get_artist_top_tracks(artist_id, limit=30)
+                for dt in a_tracks:
+                    tid = dt.get("id")
+                    if tid and tid not in all_artist_tracks:
+                        all_artist_tracks[tid] = dt
+
+            # Filter: English only + popularity
+            candidates = []
+            for tid, dt in all_artist_tracks.items():
+                title = dt.get("title", "")
+                artist_str = dt.get("artist", {}).get("name", "")
+                if not _is_likely_english(title) or not _is_likely_english(artist_str):
+                    continue
+                candidates.append((tid, dt))
+
+            # Sort by popularity
+            candidates.sort(key=lambda x: -(x[1].get("rank", 0) or 0))
+
+            tracks = []
+            for tid, dt in candidates[:topk * 2]:
+                tracks.append(_deezer_track_to_heartbeats(dt, vibe["vibe_id"], bpm=target_bpm))
+                if len(tracks) >= topk:
+                    break
+
+            random.shuffle(tracks)
+            for i, t in enumerate(tracks, start=1):
+                t["rank"] = i
         else:
-            tracks = _fetch_vibe_tracks(vibe, target_bpm, limit=max(topk, 30))
-            _vibe_tracks_cache[cache_key] = (now, tracks)
-            tracks = tracks[:topk]
+            # No artist filter — use generic cached pool
+            cache_key = f"{vibe['vibe_id']}:{int(target_bpm)}"
+            cached = _vibe_tracks_cache.get(cache_key)
+            now = time.time()
+
+            if cached and (now - cached[0]) < _VIBE_CACHE_TTL and len(cached[1]) >= min(topk, 20):
+                tracks = cached[1][:topk]
+            else:
+                tracks = _fetch_vibe_tracks(vibe, target_bpm, limit=50)
+                _vibe_tracks_cache[cache_key] = (now, tracks)
+                tracks = tracks[:topk]
 
         return jsonify({
             "success": True,
@@ -369,6 +448,7 @@ def get_tracks_from_track():
         cluster_id = data.get("cluster_id")
         topk = min(data.get("topk", 10), 30)
         exclude_ids = set(str(x) for x in data.get("exclude_ids", []))
+        artist_names = [a.lower() for a in data.get("artist_names", [])]
 
         if not track_id:
             return jsonify({"success": False, "error": "track_id is required"}), 400
@@ -441,7 +521,14 @@ def get_tracks_from_track():
                 if len(result_tracks) >= topk:
                     break
 
-        result_tracks = result_tracks[:topk]
+        if artist_names:
+            # Keep only tracks from the selected artists
+            lower_names = [a.lower() for a in artist_names]
+            filtered = [t for t in result_tracks if t.get('artists', '').lower() in lower_names]
+            result_tracks = filtered[:topk] if filtered else result_tracks[:topk]
+        else:
+            result_tracks = result_tracks[:topk]
+
         for i, t in enumerate(result_tracks, start=1):
             t["rank"] = i
 

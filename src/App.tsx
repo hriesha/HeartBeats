@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { GlowingArcs } from './components/GlowingArcs';
@@ -10,6 +10,8 @@ import { WorkoutSelection } from './components/WorkoutSelection';
 import { VibeSelection } from './components/VibeSelection';
 import { VibeDetail } from './components/VibeDetail';
 import { TrackerConnected } from './components/TrackerConnected';
+import { ArtistSelection } from './components/ArtistSelection';
+import HealthKit from './plugins/HealthKit';
 
 export type VibeType = {
   id: string;
@@ -18,14 +20,22 @@ export type VibeType = {
   tags: string[];
   clusterId?: number;
   meanTempo?: number;
+  topArtists?: string[];
 };
 
 export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<'loading' | 'connect' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'detail' | 'trackerConnected'>('loading');
+  const [currentScreen, setCurrentScreen] = useState<'loading' | 'connect' | 'controlOptions' | 'bpm' | 'workout' | 'vibe' | 'artistSelection' | 'detail' | 'trackerConnected'>('loading');
   const [selectedBPM, setSelectedBPM] = useState(120);
   const [paceValue, setPaceValue] = useState(10.0);
   const [paceUnit, setPaceUnit] = useState<'min/mile' | 'min/km'>('min/mile');
   const [selectedVibe, setSelectedVibe] = useState<VibeType | null>(null);
+  const [selectedArtists, setSelectedArtists] = useState<string[]>([]);
+
+  // Watch / HealthKit state — lives here so BPM persists across screens
+  const [watchBpm, setWatchBpm] = useState<number | null>(null);
+  const [watchStatus, setWatchStatus] = useState<'idle' | 'requesting' | 'waiting' | 'reading' | 'denied'>('idle');
+  const [isWatchMode, setIsWatchMode] = useState(false);
+  const watchListenerRef = useRef<{ remove: () => void } | null>(null);
 
   // Configure native status bar
   useEffect(() => {
@@ -39,7 +49,6 @@ export default function App() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // Wait for MusicKit to be available
         const waitForMusicKit = (): Promise<void> => {
           return new Promise((resolve) => {
             if (window.MusicKit) { resolve(); return; }
@@ -52,16 +61,10 @@ export default function App() {
 
         await waitForMusicKit();
 
-        if (!window.MusicKit) {
-          setCurrentScreen('connect');
-          return;
-        }
+        if (!window.MusicKit) { setCurrentScreen('connect'); return; }
 
         const developerToken = import.meta.env.VITE_APPLE_MUSIC_DEVELOPER_TOKEN;
-        if (!developerToken) {
-          setCurrentScreen('connect');
-          return;
-        }
+        if (!developerToken) { setCurrentScreen('connect'); return; }
 
         const music = await window.MusicKit.configure({
           developerToken,
@@ -81,20 +84,46 @@ export default function App() {
     checkAuth();
   }, []);
 
-  const handleConnected = () => {
-    setCurrentScreen('controlOptions');
+  const startWatchMonitoring = async () => {
+    if (!Capacitor.isNativePlatform()) {
+      setWatchStatus('reading');
+      setWatchBpm(142);
+      return;
+    }
+    setWatchStatus('requesting');
+    try {
+      const { granted } = await HealthKit.requestPermission();
+      if (!granted) { setWatchStatus('denied'); return; }
+      setWatchStatus('waiting');
+      await HealthKit.startHeartRateMonitoring();
+      const handle = await HealthKit.addListener('heartRateUpdate', (data) => {
+        setWatchBpm(data.bpm);
+        setWatchStatus('reading');
+      });
+      watchListenerRef.current = handle;
+    } catch (err) {
+      console.error('HealthKit error:', err);
+      setWatchStatus('denied');
+    }
   };
 
-  const handleSkip = () => {
-    setCurrentScreen('controlOptions');
+  const stopWatchMonitoring = () => {
+    watchListenerRef.current?.remove();
+    watchListenerRef.current = null;
+    HealthKit.stopHeartRateMonitoring().catch(() => {});
+    HealthKit.removeAllListeners().catch(() => {});
+    setWatchBpm(null);
+    setWatchStatus('idle');
+    setIsWatchMode(false);
   };
+
+  const handleConnected = () => setCurrentScreen('controlOptions');
+  const handleSkip = () => setCurrentScreen('controlOptions');
 
   const handleDisconnect = async () => {
     try {
       const music = window.MusicKit?.getInstance?.();
-      if (music) {
-        await music.unauthorize();
-      }
+      if (music) await music.unauthorize();
     } catch (err) {
       console.warn('Disconnect error:', err);
     }
@@ -102,36 +131,40 @@ export default function App() {
   };
 
   const handleSelectCustomControls = () => {
+    setIsWatchMode(false);
     setCurrentScreen('bpm');
   };
 
   const handleSelectWatch = () => {
+    setIsWatchMode(true);
     setCurrentScreen('trackerConnected');
+    startWatchMonitoring();
   };
 
-  const handleTrackerConnected = () => {
-    setSelectedBPM(125);
-    setCurrentScreen('vibe');
+  const handleTrackerConnected = (bpm: number, vibe: VibeType) => {
+    setSelectedBPM(bpm);
+    setSelectedVibe(vibe);
+    setCurrentScreen('artistSelection');
   };
 
   const handlePaceSubmit = (value: number, unit: 'min/mile' | 'min/km') => {
     setPaceValue(value);
     setPaceUnit(unit);
+    // Mirror the backend BPM formula so VibeDetail fetches at the right BPM
+    const KM_PER_MILE = 1.609344;
+    let speedMph = 60 / value;
+    if (unit === 'min/km') speedMph /= KM_PER_MILE;
+    const bpm = Math.max(140, Math.min(200, Math.round(125 + 5.5 * speedMph)));
+    setSelectedBPM(bpm);
     setCurrentScreen('vibe');
   };
 
-  const handleChooseWorkout = () => {
-    setCurrentScreen('workout');
-  };
+  const handleChooseWorkout = () => setCurrentScreen('workout');
 
   const handleWorkoutSelect = (workout: string) => {
     const workoutBPMs: { [key: string]: number } = {
-      jogging: 130,
-      cycling: 120,
-      strength: 110,
-      swimming: 140,
-      hiit: 160,
-      yoga: 90
+      jogging: 130, cycling: 120, strength: 110,
+      swimming: 140, hiit: 160, yoga: 90,
     };
     setSelectedBPM(workoutBPMs[workout] || 120);
     setCurrentScreen('vibe');
@@ -139,12 +172,26 @@ export default function App() {
 
   const handleVibeSelect = (vibe: VibeType) => {
     setSelectedVibe(vibe);
+    setCurrentScreen('artistSelection');
+  };
+
+  const handleArtistsSelected = (artists: string[]) => {
+    setSelectedArtists(artists);
     setCurrentScreen('detail');
   };
 
   const handleBack = () => {
     if (currentScreen === 'detail') {
-      setCurrentScreen('vibe');
+      setCurrentScreen('artistSelection');
+    } else if (currentScreen === 'artistSelection') {
+      if (isWatchMode) {
+        setCurrentScreen('trackerConnected');
+      } else {
+        setCurrentScreen('vibe');
+      }
+    } else if (currentScreen === 'trackerConnected') {
+      stopWatchMonitoring();
+      setCurrentScreen('controlOptions');
     } else if (currentScreen === 'vibe') {
       setCurrentScreen('bpm');
     } else if (currentScreen === 'workout') {
@@ -170,12 +217,21 @@ export default function App() {
           </div>
         )}
         {currentScreen === 'connect' && <AppleMusicConnect onConnected={handleConnected} onSkip={handleSkip} onDisconnect={handleDisconnect} />}
-        {currentScreen === 'controlOptions' && <ControlOptions onSelectCustom={handleSelectCustomControls} onSelectWatch={handleSelectWatch} onBack={handleBack} />}
+        {currentScreen === 'controlOptions' && <ControlOptions onSelectCustom={handleSelectCustomControls} onSelectWatch={handleSelectWatch} onBack={handleBack} onDisconnect={handleDisconnect} />}
         {currentScreen === 'bpm' && <PaceSelection onSubmit={handlePaceSubmit} onChooseWorkout={handleChooseWorkout} onBack={handleBack} />}
         {currentScreen === 'workout' && <WorkoutSelection onWorkoutSelect={handleWorkoutSelect} onBack={handleBack} />}
         {currentScreen === 'vibe' && <VibeSelection paceValue={paceValue} paceUnit={paceUnit} bpm={selectedBPM} onVibeSelect={handleVibeSelect} onBack={handleBack} />}
-        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} onBack={handleBack} />}
-        {currentScreen === 'trackerConnected' && <TrackerConnected onComplete={handleTrackerConnected} />}
+        {currentScreen === 'artistSelection' && selectedVibe && (
+          <ArtistSelection
+            vibe={selectedVibe}
+            bpm={selectedBPM}
+            topArtists={selectedVibe.topArtists || []}
+            onComplete={handleArtistsSelected}
+            onBack={handleBack}
+          />
+        )}
+        {currentScreen === 'detail' && selectedVibe && <VibeDetail vibe={selectedVibe} bpm={selectedBPM} watchBpm={isWatchMode ? watchBpm : null} artistNames={selectedArtists} onBack={handleBack} />}
+        {currentScreen === 'trackerConnected' && <TrackerConnected watchBpm={watchBpm} watchStatus={watchStatus} onComplete={handleTrackerConnected} onBack={handleBack} />}
       </div>
     </div>
   );

@@ -5,9 +5,8 @@ const config: CapacitorConfig = {
   appName: 'HeartBeats',
   webDir: 'dist',
   server: {
-    // For dev: uncomment and set to your Mac's local IP for live reload
-    // url: 'http://192.168.1.100:5173',
-    // cleartext: true,
+    url: 'http://172.20.126.50:5173',
+    cleartext: true,
     allowNavigation: [
       'js-cdn.music.apple.com',
       'api.music.apple.com',

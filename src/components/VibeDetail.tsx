@@ -1,5 +1,5 @@
 import { motion } from 'motion/react';
-import { ChevronLeft, Play, Pause, Music, SkipForward, MessageCircle } from 'lucide-react';
+import { ChevronLeft, Play, Pause, Music, SkipForward, MessageCircle, Heart } from 'lucide-react';
 import { FeedbackModal } from './FeedbackModal';
 import { VibeType } from '../App';
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -9,16 +9,19 @@ import { useMusicKitPlayer } from '../hooks/useMusicKitPlayer';
 interface VibeDetailProps {
   vibe: VibeType;
   bpm?: number;
+  watchBpm?: number | null;
+  artistNames?: string[];
   onBack: () => void;
 }
 
-export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
+export function VibeDetail({ vibe, bpm = 120, watchBpm, artistNames, onBack }: VibeDetailProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [nowPlayingIndex, setNowPlayingIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
 
+  const isWatchMode = watchBpm !== null && watchBpm !== undefined;
   const clusterId = parseInt(vibe.id.split('-')[1] || '0');
   const tracksRef = useRef<Track[]>([]);
   const nowPlayingIndexRef = useRef(0);
@@ -26,15 +29,20 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
   const fetchingReservesRef = useRef(false);
   const lastExtendedForRef = useRef<number>(-1);
 
+  // Dynamic BPM queue (watch mode only)
+  const queueBpmRef = useRef<number>(bpm);
+  const isSwappingRef = useRef(false);
+  const [bpmSwapToast, setBpmSwapToast] = useState<number | null>(null);
+
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { nowPlayingIndexRef.current = nowPlayingIndex; }, [nowPlayingIndex]);
 
-  // Fetch a pool of reserve tracks for queue extension
+  // Fetch a pool of reserve tracks for queue extension (static mode only)
   const fetchReserves = useCallback(async () => {
     if (fetchingReservesRef.current) return;
     fetchingReservesRef.current = true;
     try {
-      const result = await getClusterTracks(clusterId, bpm, 50);
+      const result = await getClusterTracks(clusterId, bpm, 50, artistNames?.length ? artistNames : undefined);
       if (!result?.tracks?.length) return;
       // Filter out tracks already in queue
       const queueIds = new Set(tracksRef.current.map(t => t.track_id ?? t.id));
@@ -46,7 +54,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     } finally {
       fetchingReservesRef.current = false;
     }
-  }, [clusterId, bpm]);
+  }, [clusterId, bpm, artistNames]);
 
   // Add exactly 1 track to the END of the queue
   const extendQueue = useCallback(() => {
@@ -94,8 +102,8 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
       }
     }
 
-    // Add exactly 1 track to the end when a new song starts
-    if (nowPlayingIndex >= 0 && nowPlayingIndex !== lastExtendedForRef.current) {
+    // Add exactly 1 track to the end when a new song starts (static mode only)
+    if (!isWatchMode && nowPlayingIndex >= 0 && nowPlayingIndex !== lastExtendedForRef.current) {
       lastExtendedForRef.current = nowPlayingIndex;
       extendQueue();
     }
@@ -110,8 +118,10 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     const run = async () => {
       setIsLoading(true);
       setError(null);
+      queueBpmRef.current = bpm;
       try {
-        const clusterData = await getClusterTracks(clusterId, bpm, 50);
+        const fetchLimit = isWatchMode ? 10 : 50;
+        const clusterData = await getClusterTracks(clusterId, bpm, fetchLimit, artistNames?.length ? artistNames : undefined);
         if (!clusterData?.tracks?.length) {
           setError('No tracks found for this cluster. Try another vibe.');
           return;
@@ -135,14 +145,21 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
         const otherTracks = playable.filter((_, idx) => idx !== randomIdx);
         const ordered = [randomTrack, ...otherTracks];
 
-        // Show first 20 in queue, stash the rest as reserves
-        const INITIAL_QUEUE_SIZE = 20;
-        const initialQueue = ordered.slice(0, INITIAL_QUEUE_SIZE);
-        const initialReserves = ordered.slice(INITIAL_QUEUE_SIZE);
-        reserveRef.current = initialReserves;
+        if (isWatchMode) {
+          // Watch mode: show up to 5 tracks, no reserve pool
+          const initialQueue = ordered.slice(0, 5);
+          setTracks(initialQueue);
+          tracksRef.current = initialQueue;
+        } else {
+          // Static mode: show first 20, stash rest as reserves
+          const INITIAL_QUEUE_SIZE = 20;
+          const initialQueue = ordered.slice(0, INITIAL_QUEUE_SIZE);
+          const initialReserves = ordered.slice(INITIAL_QUEUE_SIZE);
+          reserveRef.current = initialReserves;
+          setTracks(initialQueue);
+          tracksRef.current = initialQueue;
+        }
 
-        setTracks(initialQueue);
-        tracksRef.current = initialQueue;
         setNowPlayingIndex(0);
         nowPlayingIndexRef.current = 0;
 
@@ -161,7 +178,7 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
 
     run();
     return () => { cancelled = true; };
-  }, [clusterId, bpm]);
+  }, [clusterId, bpm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Start playback once player is ready and tracks are loaded
   useEffect(() => {
@@ -178,6 +195,34 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
   useEffect(() => {
     return () => { player.cleanup(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Dynamic BPM queue swap (watch mode only)
+  useEffect(() => {
+    if (!isWatchMode || !watchBpm || isSwappingRef.current) return;
+    const delta = Math.abs(watchBpm - queueBpmRef.current);
+    if (delta < 15) return;
+
+    isSwappingRef.current = true;
+    queueBpmRef.current = watchBpm;
+    const musicBpm = watchBpm < 120 ? Math.min(watchBpm * 2, 200) : watchBpm;
+
+    getClusterTracks(clusterId, musicBpm, 5, artistNames?.length ? artistNames : undefined)
+      .then(async res => {
+        if (!res?.tracks?.length) return;
+        const resolved = await resolveAppleMusicIds(res.tracks);
+        const playable = resolved.filter(t => t.apple_music_id);
+        if (playable.length === 0) return;
+        setTracks(prev => {
+          const currentAndBefore = prev.slice(0, nowPlayingIndexRef.current + 1);
+          const upcoming = playable.slice(0, Math.max(1, 5 - currentAndBefore.length));
+          return [...currentAndBefore, ...upcoming];
+        });
+        setBpmSwapToast(watchBpm);
+        setTimeout(() => setBpmSwapToast(null), 2000);
+      })
+      .catch(err => console.error('BPM swap error:', err))
+      .finally(() => { isSwappingRef.current = false; });
+  }, [watchBpm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleNext = async () => {
     const nextIdx = nowPlayingIndex + 1;
@@ -226,20 +271,64 @@ export function VibeDetail({ vibe, bpm = 120, onBack }: VibeDetailProps) {
     <>
     <FeedbackModal isOpen={showFeedback} onClose={() => setShowFeedback(false)} />
     <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      {/* Feedback Button */}
-      <motion.button
-        onClick={() => setShowFeedback(true)}
-        style={{
-          position: 'absolute', top: 'calc(20px + var(--safe-area-top))', right: 20,
-          width: 44, height: 44, borderRadius: '50%', zIndex: 20,
-          background: 'rgba(255, 45, 85, 0.12)', border: '1px solid rgba(255, 45, 85, 0.25)',
-          color: '#FF2D55', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          cursor: 'pointer',
-        }}
-        whileTap={{ scale: 0.9 }}
-      >
-        <MessageCircle style={{ width: 18, height: 18 }} />
-      </motion.button>
+      {/* Top-right: live BPM pill (watch mode) + feedback button */}
+      <div style={{ position: 'absolute', top: 'calc(20px + var(--safe-area-top))', right: 20, zIndex: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {bpmSwapToast !== null && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            style={{
+              padding: '5px 10px', borderRadius: '20px',
+              background: 'rgba(255, 45, 85, 0.15)', border: '1px solid rgba(255, 45, 85, 0.3)',
+              fontFamily: 'var(--font-body)', fontSize: '10px', fontWeight: 400, color: '#FF6B8A',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            queue updated · {bpmSwapToast} bpm
+          </motion.div>
+        )}
+      {watchBpm !== null && watchBpm !== undefined && (
+          <motion.div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '6px 12px', borderRadius: '20px',
+              background: 'rgba(255, 45, 85, 0.1)', border: '1px solid rgba(255, 45, 85, 0.25)',
+            }}
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+          >
+            <motion.div
+              animate={{ scale: [1, 1.3, 1] }}
+              transition={{ duration: 0.6, repeat: Infinity, ease: 'easeInOut' }}
+            >
+              <Heart style={{ width: 10, height: 10, color: '#FF2D55', fill: '#FF2D55' }} />
+            </motion.div>
+            <motion.span
+              key={watchBpm}
+              initial={{ color: '#FF2D55' }}
+              animate={{ color: '#ffffff' }}
+              transition={{ duration: 0.3 }}
+              style={{ fontFamily: 'var(--font-heading)', fontSize: '14px', fontWeight: 200 }}
+            >
+              {watchBpm}
+            </motion.span>
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: '10px', color: 'rgba(255,255,255,0.4)', fontWeight: 300 }}>bpm</span>
+          </motion.div>
+        )}
+        <motion.button
+          onClick={() => setShowFeedback(true)}
+          style={{
+            width: 44, height: 44, borderRadius: '50%',
+            background: 'rgba(255, 45, 85, 0.12)', border: '1px solid rgba(255, 45, 85, 0.25)',
+            color: '#FF2D55', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer',
+          }}
+          whileTap={{ scale: 0.9 }}
+        >
+          <MessageCircle style={{ width: 18, height: 18 }} />
+        </motion.button>
+      </div>
 
       {/* Back Button */}
       <button

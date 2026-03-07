@@ -4,6 +4,10 @@ import { VibeType } from '../App';
 import { useState, useEffect } from 'react';
 import { runClustering, Cluster } from '../utils/api';
 
+// Module-level cache so back navigation reuses clusters instantly
+const _vibeCache = new Map<string, { clusters: Cluster[]; timestamp: number }>();
+const VIBE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 interface VibeSelectionProps {
   paceValue: number;
   paceUnit: 'min/mile' | 'min/km';
@@ -62,17 +66,26 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
 
   useEffect(() => {
     const fetchClusters = async () => {
+      // Check module-level cache first — instant on back navigation
+      const cacheKey = `${paceValue}-${paceUnit}`;
+      const cached = _vibeCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < VIBE_CACHE_TTL) {
+        setClusters(cached.clusters);
+        setIsLoading(false);
+        return;
+      }
+
       setIsLoading(true);
       setError(null);
 
       try {
         const result = await runClustering(paceValue, paceUnit);
-        console.log('Clustering result:', result);
 
         if (result && result.clusters) {
           if (result.clusters.length === 0) {
             setError(`No tracks found for this pace. Try a different pace.`);
           } else {
+            _vibeCache.set(cacheKey, { clusters: result.clusters, timestamp: Date.now() });
             setClusters(result.clusters);
           }
         } else {
@@ -100,6 +113,7 @@ export function VibeSelection({ paceValue, paceUnit, bpm, onVibeSelect, onBack }
       name: cluster.name,
       color: cluster.color,
       tags: cluster.tags,
+      topArtists: cluster.top_artists || [],
     };
 
     setSelectedVibe(vibe);

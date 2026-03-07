@@ -176,6 +176,21 @@ class DeezerClient:
         self._cache_set(cache_key, artists, CACHE_TTL_CHART)
         return artists
 
+    def search_artist(self, name: str) -> Optional[Dict[str, Any]]:
+        """Search for an artist by name, return the best match."""
+        cache_key = f"artist_search:{name.lower()}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        data = self._get("/search/artist", params={"q": name, "limit": 1})
+        if not data or "data" not in data or not data["data"]:
+            return None
+
+        artist = data["data"][0]
+        self._cache_set(cache_key, artist, CACHE_TTL_ARTIST_TRACKS)
+        return artist
+
     def get_artist_top_tracks(self, artist_id: int,
                               limit: int = 25) -> List[Dict[str, Any]]:
         cache_key = f"artist_top:{artist_id}:{limit}"
