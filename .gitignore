@@ -39,10 +39,25 @@ yarn-error.log*
 
 # App Icons (large binary files)
 AppIcons/
-annas_archive_data/
 *.log
 __pycache__/
 *.pyc
+
+# Local data-sourcing scripts and docs (kept out of the public repo)
+annas_archive_data/
+annas_archive_helper.py
+annas_archive_to_df.ipynb
+extract_audio_features.py
+recs/annas_archive_to_csv.py
+recs/merge_annas_kaggle.py
+ANNAS_ARCHIVE_SETUP.md
+EXTRACT_ANNAS_ARCHIVE.md
+EXTRACT_INSTRUCTIONS.md
+INSTALL_TRANSMISSION.md
+*.torrent
+*.sqlite3
+*.sqlite3.zst
+*.zst
 
 # Xcode user data
 xcuserdata/
