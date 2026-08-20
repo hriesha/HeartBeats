@@ -1,6 +1,8 @@
 # HeartBeats
 
 A music recommendation app that matches songs to your heart rate using KMeans clustering and KNN matching.
+https://heartbeatswaitlist.vercel.app
+
 
 ## Features
 
